@@ -6,11 +6,12 @@
  *     scans/
  *       <scanId>.json    — full scan result
  *     latest.json        — symlink (or copy) to the most recent scan
+ *     file-cache.json   — per-file mtime/size cache for incremental scans
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { copyFileSync } from 'fs';
 import { join } from 'path';
-import type { ScanResult } from './types';
+import type { ScanResult, FileAnalysis } from './types';
 
 export function saveScanResult(outputDir: string, result: ScanResult): string {
   const scansDir = join(outputDir, 'scans');
@@ -55,6 +56,65 @@ export function listScans(outputDir: string): string[] {
     .filter((f) => f.endsWith('.json'))
     .map((f) => f.replace('.json', ''))
     .reverse();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// File-level incremental scan cache
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CACHE_VERSION = 1;
+const CACHE_FILENAME = 'file-cache.json';
+
+/** One cached entry per source file */
+export interface FileCacheEntry {
+  /** File modification time in milliseconds (from fs.stat.mtimeMs) */
+  mtime: number;
+  /** File size in bytes (from fs.stat.size) */
+  size: number;
+  /** Previously computed analysis for this file */
+  analysis: FileAnalysis;
+}
+
+/**
+ * On-disk structure for the file-level cache.
+ * The cache is invalidated wholesale when the version or target packages change.
+ */
+export interface FileCache {
+  version: typeof CACHE_VERSION;
+  /** Sorted target packages — changing these invalidates all entries */
+  targetPackages: string[];
+  /** Map from absolute file path -> cached entry */
+  entries: Record<string, FileCacheEntry>;
+}
+
+/** Load (or create a blank) file cache from outputDir. */
+export function loadFileCache(outputDir: string, targetPackages: string[]): FileCache {
+  const blank = (): FileCache => ({
+    version: CACHE_VERSION,
+    targetPackages: [...targetPackages].sort(),
+    entries: {},
+  });
+
+  const cachePath = join(outputDir, CACHE_FILENAME);
+  if (!existsSync(cachePath)) return blank();
+
+  try {
+    const raw = JSON.parse(readFileSync(cachePath, 'utf-8')) as FileCache;
+    if (raw.version !== CACHE_VERSION) return blank();
+    // Invalidate if the set of tracked packages changed
+    const sortedNew = [...targetPackages].sort().join('\0');
+    const sortedOld = [...(raw.targetPackages ?? [])].sort().join('\0');
+    if (sortedNew !== sortedOld) return blank();
+    return raw;
+  } catch {
+    return blank();
+  }
+}
+
+/** Persist the file cache to outputDir. */
+export function saveFileCache(outputDir: string, cache: FileCache): void {
+  mkdirSync(outputDir, { recursive: true });
+  writeFileSync(join(outputDir, CACHE_FILENAME), JSON.stringify(cache), 'utf-8');
 }
 
 /**

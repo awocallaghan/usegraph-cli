@@ -8,7 +8,9 @@
 - [x] Fix AstNode import bug in file-analyzer.ts (imported from extractor instead of walker)
 - [x] Run `pnpm install && pnpm build` to verify compilation — PASSES (Loop 5)
 - [x] Fix any TypeScript compilation errors — none found (Loop 5)
+- [x] Integration test: run `usegraph scan` on a mock "real" project — 12 tests in tests/scanner.test.js, all passing (Loop 10)
 - [ ] Integration test: run `usegraph scan` on a real project (node blocked by permissions)
+- [ ] Data collection options: output to local directory or sqlite db. Update dashboard to work with different data collection options
 
 ## Medium Priority
 - [x] Add configuration file support (usegraph.config.json / .usegraphrc)
@@ -18,7 +20,7 @@
 - [x] Update README.md with usage instructions (Loop 4)
 
 ## Low Priority
-- [ ] Performance optimization (file-level caching, skip unchanged files)
+- [x] Performance optimization (file-level caching, skip unchanged files) — Loop 9
 - [ ] Add shell completion support (bash/zsh completion scripts)
 - [x] Web dashboard — `usegraph serve` command (Loop 7)
 - [x] `--open` flag for `serve`: auto-opens browser on macOS/Linux/Windows (Loop 8)
@@ -98,6 +100,26 @@
   - `--open` exposed in `cli.ts` as `.option('--open', '...')`
   - Component table in HTML dashboard now shows top-5 props as purple pill badges
   - New `.prop-tag` CSS class in embedded styles
+
+## Loop 9 Notes
+- Implemented incremental file-level caching for `usegraph scan`:
+  - `src/storage.ts`: added `FileCacheEntry`, `FileCache` interfaces + `loadFileCache` / `saveFileCache`
+  - Cache stored in `<outputDir>/file-cache.json`; invalidated when version or target packages change
+  - `src/analyzer/scanner.ts`: added `cacheDir?: string` to `ScanOptions`; worker checks `statSync` mtime+size vs cache entry — hit = reuse analysis, miss = re-parse + update entry; cache saved after all workers complete
+  - `src/types.ts`: added optional `cacheHits?: number` to `ScanResult`
+  - `src/commands/scan.ts`: passes `cacheDir: outputDir`; progress shows `[cache]` suffix for hits; summary shows "From cache: N (M re-analyzed)" line
+  - Also fixed pre-existing TS error in `serve.ts`: replaced `shell: true` with `cmd.exe /c start` to avoid type mismatch with `@types/node`
+- Build: tsc clean, 36/36 tests passing
+
+## Loop 10 Notes
+- Added `tests/scanner.test.js`: 12 integration tests covering the full scan pipeline
+  - File count, component usages, props, function calls, per-package summaries
+  - Incremental caching: warm cache = 100% hits, package change = full invalidation
+  - Cache file written to cacheDir, cache entries count matches scanned files
+  - Storage round-trip: saveScanResult + loadLatestScanResult
+  - loadLatestScanResult returns null for empty output dir
+- All 48 tests pass (36 unit + 12 integration)
+- Build: tsc clean
 
 ## Notes
 - `@swc/core` needs native binaries; installed automatically by pnpm

@@ -80,10 +80,12 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
     targetPackages,
     config,
     concurrency,
-    onProgress: (done, total, file) => {
+    cacheDir: outputDir,
+    onProgress: (done, total, file, cached) => {
       clearLast();
+      const suffix = cached ? chalk.dim(' [cache]') : '';
       lastLine = `  Scanning ${done}/${total}: ${file}`;
-      process.stdout.write(chalk.dim(lastLine));
+      process.stdout.write(chalk.dim(lastLine) + suffix);
     },
   });
 
@@ -114,6 +116,10 @@ function printScanSummary(result: ScanResult, elapsedSec: string): void {
   const { summary } = result;
   console.log(chalk.bold(`Scan complete`) + chalk.dim(` (${elapsedSec}s)`));
   console.log(`  Files scanned:      ${summary.totalFilesScanned}`);
+  if (result.cacheHits !== undefined && result.cacheHits > 0) {
+    const fresh = summary.totalFilesScanned - result.cacheHits;
+    console.log(chalk.dim(`  From cache:         ${result.cacheHits} (${fresh} re-analyzed)`));
+  }
   if (summary.filesWithErrors > 0) {
     console.log(chalk.yellow(`  Files with errors:  ${summary.filesWithErrors}`));
   }

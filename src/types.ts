@@ -117,6 +117,8 @@ export interface ScanResult {
   summary: ScanSummary;
   /** Project metadata: package.json deps + detected tooling (optional, added by STRETCH analysis) */
   meta?: ProjectMeta;
+  /** Number of files loaded from the incremental cache (0 when cache disabled or cold) */
+  cacheHits?: number;
 }
 
 // --------------------------------------------------------------------------
