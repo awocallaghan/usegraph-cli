@@ -1,0 +1,63 @@
+import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import type { UsegraphConfig } from './types';
+
+const CONFIG_FILENAMES = [
+  'usegraph.config.json',
+  '.usegraphrc',
+  '.usegraphrc.json',
+];
+
+export const DEFAULT_CONFIG: UsegraphConfig = {
+  targetPackages: [],
+  include: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.mjs', '**/*.cjs'],
+  exclude: [
+    '**/node_modules/**',
+    '**/dist/**',
+    '**/build/**',
+    '**/.git/**',
+    '**/*.d.ts',
+    '**/*.test.*',
+    '**/*.spec.*',
+    '**/coverage/**',
+    '**/.next/**',
+    '**/.nuxt/**',
+  ],
+  outputDir: '.usegraph',
+};
+
+export function loadConfig(projectPath: string): UsegraphConfig {
+  for (const name of CONFIG_FILENAMES) {
+    const configPath = join(projectPath, name);
+    if (existsSync(configPath)) {
+      try {
+        const raw = readFileSync(configPath, 'utf-8');
+        const parsed = JSON.parse(raw) as Partial<UsegraphConfig>;
+        return mergeConfig(DEFAULT_CONFIG, parsed);
+      } catch {
+        // Fall through to defaults
+      }
+    }
+  }
+  return { ...DEFAULT_CONFIG };
+}
+
+function mergeConfig(defaults: UsegraphConfig, overrides: Partial<UsegraphConfig>): UsegraphConfig {
+  return {
+    targetPackages: overrides.targetPackages ?? defaults.targetPackages,
+    include: overrides.include ?? defaults.include,
+    exclude: overrides.exclude ?? defaults.exclude,
+    outputDir: overrides.outputDir ?? defaults.outputDir,
+  };
+}
+
+export function writeDefaultConfig(projectPath: string): void {
+  const configPath = join(projectPath, 'usegraph.config.json');
+  const config: UsegraphConfig = {
+    targetPackages: ['your-package-name'],
+    include: ['src/**/*.ts', 'src/**/*.tsx'],
+    exclude: DEFAULT_CONFIG.exclude,
+    outputDir: '.usegraph',
+  };
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+}
