@@ -21,6 +21,7 @@ import type { ScanResult } from '../types';
 export interface ServeCommandOptions {
   port?: string;
   output?: string;
+  open?: boolean;
 }
 
 export async function runServe(
@@ -57,22 +58,47 @@ export async function runServe(
     res.end(html);
   });
 
+  const url = `http://localhost:${port}`;
+
   await new Promise<void>((serverReady) => {
     server.listen(port, () => {
       console.log('');
       console.log(chalk.bold.cyan('  usegraph · web dashboard'));
       console.log(`  ${results.length} project${results.length !== 1 ? 's' : ''} loaded`);
       console.log('');
-      console.log(`  Open: ${chalk.bold.underline('http://localhost:' + String(port))}`);
+      console.log(`  Open: ${chalk.bold.underline(url)}`);
       console.log('');
       console.log(chalk.dim('  Press Ctrl+C to stop the server.'));
       serverReady();
     });
   });
 
+  if (opts.open) {
+    openBrowser(url);
+  }
+
   // Keep the server alive until interrupted
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   await new Promise<void>(() => { /* intentionally never resolves */ });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Browser launcher
+// ─────────────────────────────────────────────────────────────────────────────
+
+function openBrowser(url: string): void {
+  const { execSync } = require('child_process') as typeof import('child_process');
+  try {
+    if (process.platform === 'darwin') {
+      execSync(`open "${url}"`, { stdio: 'ignore' });
+    } else if (process.platform === 'win32') {
+      execSync(`start "" "${url}"`, { stdio: 'ignore', shell: true });
+    } else {
+      execSync(`xdg-open "${url}"`, { stdio: 'ignore' });
+    }
+  } catch {
+    // Silently ignore – user can open the URL manually
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -205,6 +231,19 @@ tr:last-child td { border-bottom: none; }
 .bar-fill { height: 100%; border-radius: 3px; background: var(--accent); }
 .bar-fill.fn { background: var(--purple); }
 .more-row td { color: var(--text-dim); font-size: 12px; }
+
+/* Prop tag pills */
+.prop-tag {
+  display: inline-block;
+  background: rgba(167,139,250,0.15);
+  color: var(--purple);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+  margin-right: 4px;
+  margin-bottom: 2px;
+}
 
 /* Tooling / dep section */
 .tooling-section {
@@ -372,6 +411,21 @@ const DASHBOARD_JS = `
     out += '<div class="pkg-label">' + esc(pkg) + '</div>';
     out += '<div class="tables-grid">';
 
+    /* Collect prop frequencies per component */
+    var propCounts = {};
+    for (var fi2 = 0; fi2 < result.files.length; fi2++) {
+      var f2 = result.files[fi2];
+      for (var ci3 = 0; ci3 < f2.componentUsages.length; ci3++) {
+        var u2 = f2.componentUsages[ci3];
+        if (u2.importedFrom !== pkg) continue;
+        if (!propCounts[u2.componentName]) propCounts[u2.componentName] = {};
+        for (var pi = 0; pi < u2.props.length; pi++) {
+          var pname = u2.props[pi].name;
+          propCounts[u2.componentName][pname] = (propCounts[u2.componentName][pname] || 0) + 1;
+        }
+      }
+    }
+
     /* Components table */
     var compKeys = Object.keys(compCounts).sort(function (a, b) {
       return compCounts[b] - compCounts[a];
@@ -380,20 +434,31 @@ const DASHBOARD_JS = `
       var maxC = compCounts[compKeys[0]];
       out += '<div>';
       out += '<div class="section-title">Components</div>';
-      out += '<table><thead><tr><th>Name</th><th>Uses</th><th class="bar-cell"></th></tr></thead><tbody>';
+      out += '<table><thead><tr><th>Name</th><th>Uses</th><th class="bar-cell"></th><th>Top props</th></tr></thead><tbody>';
       var climit = Math.min(compKeys.length, 15);
       for (var ci2 = 0; ci2 < climit; ci2++) {
         var cn   = compKeys[ci2];
         var cv   = compCounts[cn];
         var cpct = maxC > 0 ? Math.round((cv / maxC) * 100) : 0;
+        /* top 5 props for this component */
+        var topProps = '';
+        if (propCounts[cn]) {
+          var pkeys = Object.keys(propCounts[cn]).sort(function (a, b) {
+            return propCounts[cn][b] - propCounts[cn][a];
+          }).slice(0, 5);
+          for (var pki = 0; pki < pkeys.length; pki++) {
+            topProps += '<span class="prop-tag">' + esc(pkeys[pki]) + '</span>';
+          }
+        }
         out += '<tr>';
         out += '<td class="name-cell">' + esc(cn) + '</td>';
         out += '<td>' + cv + '</td>';
         out += '<td class="bar-cell"><div class="bar-wrap"><div class="bar-fill" style="width:' + cpct + '%"></div></div></td>';
+        out += '<td>' + (topProps || '<span style="color:var(--text-dim);font-size:11px">none</span>') + '</td>';
         out += '</tr>';
       }
       if (compKeys.length > 15) {
-        out += '<tr class="more-row"><td colspan="3">+' + (compKeys.length - 15) + ' more</td></tr>';
+        out += '<tr class="more-row"><td colspan="4">+' + (compKeys.length - 15) + ' more</td></tr>';
       }
       out += '</tbody></table></div>';
     } else {

@@ -91,6 +91,7 @@ export function createCli(): Command {
     .command('serve [paths...]')
     .description('Launch a local web dashboard to visualise scan results in the browser')
     .option('-p, --port <n>', 'Port to listen on (default: 3000)')
+    .option('--open', 'Open the dashboard in the default browser automatically')
     .option('-o, --output <dir>', 'Scan output dir within each project (default: .usegraph)')
     .action(async (paths: string[], opts) => {
       try {

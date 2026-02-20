@@ -18,9 +18,11 @@
 - [x] Update README.md with usage instructions (Loop 4)
 
 ## Low Priority
-- [ ] Performance optimization
-- [ ] Add shell completion support
+- [ ] Performance optimization (file-level caching, skip unchanged files)
+- [ ] Add shell completion support (bash/zsh completion scripts)
 - [x] Web dashboard — `usegraph serve` command (Loop 7)
+- [x] `--open` flag for `serve`: auto-opens browser on macOS/Linux/Windows (Loop 8)
+- [x] Prop tag pills in serve dashboard: top-5 props shown per component row (Loop 8)
 
 ## Completed
 - [x] Project enabled for Ralph
@@ -88,6 +90,14 @@
   - All data embedded as JSON in the HTML — works offline
 - Registered `serve [paths...]` in `src/cli.ts` with --port and --output options
 - Build: tsc clean, 36/36 tests passing
+
+## Loop 8 Notes
+- Enhanced `usegraph serve` command:
+  - Added `--open` flag (`ServeCommandOptions.open`) — calls `openBrowser()` after server starts
+  - `openBrowser()` uses `open` / `start` / `xdg-open` per platform; silently ignores errors
+  - `--open` exposed in `cli.ts` as `.option('--open', '...')`
+  - Component table in HTML dashboard now shows top-5 props as purple pill badges
+  - New `.prop-tag` CSS class in embedded styles
 
 ## Notes
 - `@swc/core` needs native binaries; installed automatically by pnpm
