@@ -12,7 +12,7 @@
 import chalk from 'chalk';
 import { resolve } from 'path';
 import { loadConfig } from '../config';
-import { loadLatestScanResult, loadScanResult, listScans } from '../storage';
+import { loadLatestScanResult, loadScanResult } from '../storage';
 import type { ScanResult, ComponentUsage, FunctionCallInfo } from '../types';
 
 export interface ReportCommandOptions {
