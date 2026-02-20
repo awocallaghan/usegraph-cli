@@ -4,7 +4,8 @@
 import { parse } from '@swc/core';
 import { readFile } from 'fs/promises';
 import { relative } from 'path';
-import { extractFromAst, type AstNode } from './extractor';
+import { extractFromAst } from './extractor';
+import type { AstNode } from './walker';
 import type { FileAnalysis } from '../types';
 
 // Extensions that may contain JSX

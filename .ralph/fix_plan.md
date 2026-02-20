@@ -5,16 +5,17 @@
 - [x] Install dependencies (pnpm install) and verify build compiles
 - [x] Define the actual purpose/commands of usegraph-cli
 - [x] Implement core CLI commands based on project intent
+- [x] Fix AstNode import bug in file-analyzer.ts (imported from extractor instead of walker)
 - [ ] Run `pnpm install && pnpm build` to verify compilation (needs shell approval)
 - [ ] Fix any TypeScript compilation errors after build
 - [ ] Integration test: run `usegraph scan` on a real project
 
 ## Medium Priority
 - [x] Add configuration file support (usegraph.config.json / .usegraphrc)
+- [x] Add STRETCH: dependency + tooling detection (meta-analyzer.ts)
 - [ ] Add proper error handling and user-friendly error messages (basic done; needs polish)
 - [ ] Add test coverage for AST extractor and scanner
 - [ ] Update README.md with usage instructions
-- [ ] Add STRETCH: collect all-dependency info and tooling config detection
 
 ## Low Priority
 - [ ] Performance optimization
@@ -32,6 +33,12 @@
   - Multi-project scanner with concurrency
   - JSON storage layer (.usegraph/scans/)
   - `scan`, `report`, `dashboard`, `init`, `scans` commands
+- [x] STRETCH features (Loop 3):
+  - `src/analyzer/meta-analyzer.ts`: reads package.json, detects 25+ tooling configs
+  - New types: `DependencyEntry`, `ToolingInfo`, `ProjectMeta`
+  - `ScanResult.meta` field with dep counts + detected tooling
+  - `report` command shows detected tooling + dep stats
+  - `dashboard` command shows cross-project tooling matrix
 
 ## Architecture Notes (Loop 2)
 - **Stack:** TypeScript + Node.js + Commander.js + @swc/core + fast-glob + chalk + pnpm

@@ -5,6 +5,7 @@
 import fg from 'fast-glob';
 import { basename } from 'path';
 import { analyzeFile } from './file-analyzer';
+import { analyzeProjectMeta } from './meta-analyzer';
 import type { FileAnalysis, ScanResult, ScanSummary, PackageSummary, UsegraphConfig } from '../types';
 import { randomUUID } from 'crypto';
 
@@ -53,6 +54,7 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
   await Promise.all(workers);
 
   const summary = buildSummary(results, targetPackages);
+  const meta = analyzeProjectMeta(projectPath);
 
   return {
     id: randomUUID(),
@@ -63,6 +65,7 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
     fileCount: files.length,
     files: results,
     summary,
+    meta,
   };
 }
 

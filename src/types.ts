@@ -115,6 +115,43 @@ export interface ScanResult {
   fileCount: number;
   files: FileAnalysis[];
   summary: ScanSummary;
+  /** Project metadata: package.json deps + detected tooling (optional, added by STRETCH analysis) */
+  meta?: ProjectMeta;
+}
+
+// --------------------------------------------------------------------------
+// Dependency & tooling meta (STRETCH features)
+// --------------------------------------------------------------------------
+
+/** A single entry from package.json dependencies */
+export interface DependencyEntry {
+  name: string;
+  /** Version range as written in package.json (e.g. "^18.0.0") */
+  versionRange: string;
+  /** Which section of package.json this came from */
+  section: 'dependencies' | 'devDependencies' | 'peerDependencies' | 'optionalDependencies';
+}
+
+/** A detected tooling configuration file */
+export interface ToolingInfo {
+  /** Human-readable tool name (e.g. "TypeScript", "ESLint") */
+  name: string;
+  /** Path to the config file, relative to project root */
+  configFile: string;
+  /** Key settings extracted from JSON-based configs; null for JS configs */
+  settings: Record<string, unknown> | null;
+}
+
+/** Project metadata: package.json summary + detected tooling */
+export interface ProjectMeta {
+  /** name from package.json (empty string if not found) */
+  packageName: string;
+  /** version from package.json (empty string if not found) */
+  packageVersion: string;
+  /** All dependency entries (all sections combined) */
+  dependencies: DependencyEntry[];
+  /** Detected tooling config files */
+  tooling: ToolingInfo[];
 }
 
 /** Configuration file schema (usegraph.config.json / .usegraphrc) */

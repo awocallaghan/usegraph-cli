@@ -175,6 +175,27 @@ function printReport(result: ScanResult, opts: ReportCommandOptions): void {
     }
   }
 
+  // ── Project meta (dependencies + tooling) ───────────────────────────────
+  if (result.meta && !pkgFilter) {
+    const { meta } = result;
+
+    if (meta.tooling.length > 0) {
+      console.log(chalk.bold('Detected tooling:'));
+      for (const tool of meta.tooling) {
+        console.log(`  ${chalk.green('✓')} ${tool.name.padEnd(20)} ${chalk.dim(tool.configFile)}`);
+      }
+      console.log('');
+    }
+
+    if (meta.dependencies.length > 0) {
+      const deps = meta.dependencies.filter((d) => d.section === 'dependencies');
+      const devDeps = meta.dependencies.filter((d) => d.section === 'devDependencies');
+      console.log(chalk.bold('Dependencies:'));
+      console.log(`  ${deps.length} production  ·  ${devDeps.length} dev  ·  ${meta.dependencies.length} total`);
+      console.log('');
+    }
+  }
+
   // ── Available scans hint ─────────────────────────────────────────────────
   console.log(chalk.dim('Tip: use --files for file-level breakdown, --package <name> to filter by package.'));
 }

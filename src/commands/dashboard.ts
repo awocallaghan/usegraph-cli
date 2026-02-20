@@ -18,7 +18,7 @@ import chalk from 'chalk';
 import { resolve } from 'path';
 import { loadConfig } from '../config';
 import { loadLatestScanResult } from '../storage';
-import type { ScanResult, PackageSummary } from '../types';
+import type { ScanResult, PackageSummary, ProjectMeta } from '../types';
 
 export interface DashboardCommandOptions {
   output?: string;
@@ -136,7 +136,60 @@ function printDashboard(results: ScanResult[], opts: DashboardCommandOptions): v
   console.log(`  Component usages: ${chalk.white(String(totals.components))}`);
   console.log(`  Function calls:   ${chalk.white(String(totals.calls))}`);
   console.log('');
+
+  // ── Cross-project tooling overview ────────────────────────────────────────
+  const projectsWithMeta = results.filter((r) => r.meta);
+  if (projectsWithMeta.length > 0) {
+    console.log(chalk.bold('Tech stack across projects'));
+    console.log('');
+
+    // Collect all unique tools seen
+    const toolMatrix = buildToolMatrix(projectsWithMeta);
+    if (toolMatrix.size > 0) {
+      const projectNames = projectsWithMeta.map((r) => r.projectName);
+      console.log(
+        `  ${'Tool'.padEnd(22)}` +
+          projectNames.map((n) => n.slice(0, 14).padEnd(16)).join(''),
+      );
+      console.log(`  ${'─'.repeat(22 + projectNames.length * 16)}`);
+      for (const [tool, projectSet] of toolMatrix) {
+        const cols = projectNames
+          .map((n) => (projectSet.has(n) ? chalk.green('✓') : chalk.dim('–')).padEnd(16))
+          .join('');
+        console.log(`  ${tool.padEnd(22)}${cols}`);
+      }
+      console.log('');
+    }
+
+    // Dependency overview
+    console.log(chalk.bold('Dependency counts per project'));
+    for (const r of projectsWithMeta) {
+      if (!r.meta) continue;
+      const prod = r.meta.dependencies.filter((d) => d.section === 'dependencies').length;
+      const dev = r.meta.dependencies.filter((d) => d.section === 'devDependencies').length;
+      console.log(
+        `  ${r.projectName.padEnd(32)}  ${String(prod).padStart(3)} prod  ${String(dev).padStart(3)} dev`,
+      );
+    }
+    console.log('');
+  }
+
   console.log(chalk.dim('Tip: use --package <name> to filter, usegraph report <path> for per-project detail.'));
+}
+
+function buildToolMatrix(results: Array<{ projectName: string; meta?: ProjectMeta }>): Map<string, Set<string>> {
+  const matrix = new Map<string, Set<string>>();
+  for (const r of results) {
+    if (!r.meta) continue;
+    for (const tool of r.meta.tooling) {
+      if (!matrix.has(tool.name)) matrix.set(tool.name, new Set());
+      matrix.get(tool.name)!.add(r.projectName);
+    }
+  }
+  // Sort by how many projects use this tool (desc)
+  return new Map(
+    [...matrix.entries()].sort((a, b) => b[1].size - a[1].size),
+  );
 }
 
 // ────────────────────────────────────────────────────────────────────────────
