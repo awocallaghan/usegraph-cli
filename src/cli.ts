@@ -5,6 +5,7 @@ import chalk from 'chalk';
 import { runScan } from './commands/scan';
 import { runReport } from './commands/report';
 import { runDashboard } from './commands/dashboard';
+import { runServe } from './commands/serve';
 import { loadConfig, writeDefaultConfig } from './config';
 import { listScans } from './storage';
 
@@ -81,6 +82,22 @@ export function createCli(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(chalk.red(`Unexpected error during dashboard: ${message}`));
+        process.exit(1);
+      }
+    });
+
+  // ── serve ─────────────────────────────────────────────────────────────────
+  program
+    .command('serve [paths...]')
+    .description('Launch a local web dashboard to visualise scan results in the browser')
+    .option('-p, --port <n>', 'Port to listen on (default: 3000)')
+    .option('-o, --output <dir>', 'Scan output dir within each project (default: .usegraph)')
+    .action(async (paths: string[], opts) => {
+      try {
+        await runServe(paths, opts);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(chalk.red(`Unexpected error: ${message}`));
         process.exit(1);
       }
     });

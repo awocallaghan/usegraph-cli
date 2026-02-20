@@ -13,14 +13,14 @@
 ## Medium Priority
 - [x] Add configuration file support (usegraph.config.json / .usegraphrc)
 - [x] Add STRETCH: dependency + tooling detection (meta-analyzer.ts)
-- [ ] Add proper error handling and user-friendly error messages (basic done; needs polish)
+- [x] Add proper error handling and user-friendly error messages (Loop 6)
 - [x] Add test coverage for AST extractor and walker — 36 tests, all passing (Loop 5)
 - [x] Update README.md with usage instructions (Loop 4)
 
 ## Low Priority
 - [ ] Performance optimization
 - [ ] Add shell completion support
-- [ ] Web dashboard (future: React + charts in a separate server command)
+- [x] Web dashboard — `usegraph serve` command (Loop 7)
 
 ## Completed
 - [x] Project enabled for Ralph
@@ -63,11 +63,31 @@
 - **Supported files:** .ts, .tsx, .js, .jsx, .mjs, .cjs
 - **Storage layout:** `<project>/.usegraph/scans/<id>.json` + `latest.json`
 
+## Loop 6 Notes
+- Error handling polish complete:
+  - scan.ts: validates project path exists, validates concurrency (NaN/negative/zero → 8 + warning),
+    warns when 0 files found, shows elapsed time in summary
+  - config.ts: warns to stderr when config file fails to parse (instead of silent fallback)
+  - cli.ts: all catch blocks now print `err.message` in red via chalk (not raw object dump);
+    init command validates directory exists and wraps writeFileSync in try/catch
+- Build: tsc clean, 36/36 tests passing
+
 ## Loop 5 Notes
 - Build compiles cleanly (tsc, no errors)
 - 36 unit/integration tests added: tests/walker.test.js (9 tests) + tests/extractor.test.js (27 tests)
 - Tests use Node built-in `node:test` + `@swc/core` for real AST parsing
 - package.json test script updated to `node --test tests/*.test.js`
+
+## Loop 7 Notes
+- Implemented `usegraph serve` command: `src/commands/serve.ts` (new)
+  - Loads latest scan results from one or more project paths
+  - Starts a local HTTP server (default port 3000) with Node's built-in `http` module
+  - Serves a fully self-contained HTML dashboard (no external CDN deps)
+  - Dark-theme UI with stat cards, collapsible per-project sections, component/function
+    usage tables with proportional bar charts, and a tooling matrix
+  - All data embedded as JSON in the HTML — works offline
+- Registered `serve [paths...]` in `src/cli.ts` with --port and --output options
+- Build: tsc clean, 36/36 tests passing
 
 ## Notes
 - `@swc/core` needs native binaries; installed automatically by pnpm
