@@ -10,7 +10,7 @@
 - [x] Fix any TypeScript compilation errors — none found (Loop 5)
 - [x] Integration test: run `usegraph scan` on a mock "real" project — 12 tests in tests/scanner.test.js, all passing (Loop 10)
 - [ ] Integration test: run `usegraph scan` on a real project (node blocked by permissions)
-- [ ] Data collection options: output to local directory or sqlite db. Update dashboard to work with different data collection options
+- [ ] Create a task break down for supporting visualising scan results over time
 
 ## Medium Priority
 - [x] Add configuration file support (usegraph.config.json / .usegraphrc)
