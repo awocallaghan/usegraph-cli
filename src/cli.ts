@@ -1,6 +1,7 @@
 import { Command } from 'commander';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
+import chalk from 'chalk';
 import { runScan } from './commands/scan';
 import { runReport } from './commands/report';
 import { runDashboard } from './commands/dashboard';
@@ -42,7 +43,8 @@ export function createCli(): Command {
       try {
         await runScan(path, opts);
       } catch (err) {
-        console.error('Error during scan:', err);
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(chalk.red(`Unexpected error during scan: ${message}`));
         process.exit(1);
       }
     });
@@ -60,7 +62,8 @@ export function createCli(): Command {
       try {
         await runReport(path, opts);
       } catch (err) {
-        console.error('Error during report:', err);
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(chalk.red(`Unexpected error during report: ${message}`));
         process.exit(1);
       }
     });
@@ -76,7 +79,8 @@ export function createCli(): Command {
       try {
         await runDashboard(paths, opts);
       } catch (err) {
-        console.error('Error during dashboard:', err);
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(chalk.red(`Unexpected error during dashboard: ${message}`));
         process.exit(1);
       }
     });
@@ -87,9 +91,19 @@ export function createCli(): Command {
     .description('Create a usegraph.config.json in the project directory')
     .action((path: string | undefined) => {
       const projectPath = resolve(path ?? process.cwd());
-      writeDefaultConfig(projectPath);
-      console.log(`Created usegraph.config.json in ${projectPath}`);
-      console.log('Edit the file to specify which packages to track.');
+      if (!existsSync(projectPath)) {
+        console.error(chalk.red(`Error: Directory does not exist: ${projectPath}`));
+        process.exit(1);
+      }
+      try {
+        writeDefaultConfig(projectPath);
+        console.log(chalk.green(`✓ Created usegraph.config.json in ${projectPath}`));
+        console.log(chalk.dim('  Edit the file to specify which packages to track.'));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(chalk.red(`Error: Failed to write config file: ${message}`));
+        process.exit(1);
+      }
     });
 
   // ── scans ─────────────────────────────────────────────────────────────────

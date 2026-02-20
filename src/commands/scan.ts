@@ -10,6 +10,7 @@
  *     --json                      print raw JSON result to stdout
  */
 import chalk from 'chalk';
+import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { loadConfig } from '../config';
 import { scanProject } from '../analyzer';
@@ -26,6 +27,12 @@ export interface ScanCommandOptions {
 
 export async function runScan(projectPathArg: string | undefined, opts: ScanCommandOptions): Promise<void> {
   const projectPath = resolve(projectPathArg ?? process.cwd());
+
+  if (!existsSync(projectPath)) {
+    console.error(chalk.red(`Error: Project path does not exist: ${projectPath}`));
+    process.exit(1);
+  }
+
   const config = loadConfig(opts.config ? resolve(opts.config) : projectPath);
 
   // CLI --packages overrides config
@@ -43,7 +50,14 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
   }
 
   const outputDir = resolve(projectPath, opts.output ?? config.outputDir);
-  const concurrency = Number(opts.concurrency ?? 8);
+
+  const rawConcurrency = opts.concurrency !== undefined ? Number(opts.concurrency) : 8;
+  const concurrency = Number.isFinite(rawConcurrency) && rawConcurrency >= 1
+    ? Math.floor(rawConcurrency)
+    : 8;
+  if (opts.concurrency !== undefined && concurrency !== Math.floor(rawConcurrency)) {
+    console.warn(chalk.yellow(`Warning: Invalid --concurrency value "${opts.concurrency}", using default of 8.`));
+  }
 
   console.log(chalk.bold('usegraph scan'));
   console.log(chalk.dim(`  Project:  ${projectPath}`));
@@ -59,6 +73,8 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
     if (lastLine) process.stdout.write('\r\x1b[K');
   };
 
+  const startTime = Date.now();
+
   const result: ScanResult = await scanProject({
     projectPath,
     targetPackages,
@@ -73,6 +89,13 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
 
   clearLast();
 
+  if (result.fileCount === 0) {
+    console.warn(chalk.yellow('Warning: No source files found matching the configured patterns.'));
+    console.warn(chalk.dim('  Check your include/exclude patterns in usegraph.config.json.'));
+    console.warn(chalk.dim('  Default includes: **/*.ts, **/*.tsx, **/*.js, **/*.jsx'));
+    console.warn('');
+  }
+
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -80,15 +103,16 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
 
   const savedPath = saveScanResult(outputDir, result);
 
-  printScanSummary(result);
+  const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+  printScanSummary(result, elapsedSec);
   console.log('');
   console.log(chalk.green(`✓ Results saved to ${savedPath}`));
   console.log(chalk.dim(`  Run ${chalk.bold('usegraph report')} to view the analysis.`));
 }
 
-function printScanSummary(result: ScanResult): void {
+function printScanSummary(result: ScanResult, elapsedSec: string): void {
   const { summary } = result;
-  console.log(chalk.bold('Scan complete'));
+  console.log(chalk.bold(`Scan complete`) + chalk.dim(` (${elapsedSec}s)`));
   console.log(`  Files scanned:      ${summary.totalFilesScanned}`);
   if (summary.filesWithErrors > 0) {
     console.log(chalk.yellow(`  Files with errors:  ${summary.filesWithErrors}`));

@@ -34,7 +34,11 @@ export function loadConfig(projectPath: string): UsegraphConfig {
         const raw = readFileSync(configPath, 'utf-8');
         const parsed = JSON.parse(raw) as Partial<UsegraphConfig>;
         return mergeConfig(DEFAULT_CONFIG, parsed);
-      } catch {
+      } catch (err) {
+        process.stderr.write(
+          `Warning: Failed to parse config file ${configPath}: ${String(err)}\n` +
+          `         Falling back to default configuration.\n`,
+        );
         // Fall through to defaults
       }
     }
