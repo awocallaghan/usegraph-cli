@@ -4,7 +4,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSemver, npmLockfileParser } = require('../dist/analyzer/lockfile');
+const { parseSemver, npmLockfileParser, pnpmLockfileParser } = require('../dist/analyzer/lockfile');
 
 // ─── parseSemver ──────────────────────────────────────────────────────────────
 
@@ -268,4 +268,202 @@ test('NpmLockfileParser: result entries have all required fields', () => {
   assert.equal(typeof dep.versionIsPrerelease, 'boolean');
   // versionPrerelease can be null or string — both are valid for a non-prerelease
   assert.equal(dep.versionPrerelease, null);
+});
+
+// ─── PnpmLockfileParser — v6 format (pnpm 7/8/9) ─────────────────────────────
+
+const pnpmV6Lockfile = [
+  "lockfileVersion: '6.0'",
+  '',
+  'importers:',
+  '  .:',
+  '    dependencies:',
+  '      react:',
+  '        specifier: ^18.2.0',
+  '        version: 18.2.0',
+  '      react-dom:',
+  '        specifier: ^18.2.0',
+  '        version: 18.2.0(react@18.2.0)',
+  '    devDependencies:',
+  "      '@types/react':",
+  '        specifier: ^18.0.0',
+  '        version: 18.0.28',
+  '      lodash:',
+  '        specifier: ^4.17.21',
+  '        version: 4.17.21',
+].join('\n');
+
+test('PnpmLockfileParser v6: parses nested version field', () => {
+  const result = pnpmLockfileParser.parse(pnpmV6Lockfile);
+  assert.ok(result.has('react'), 'should have react');
+  assert.equal(result.get('react').versionResolved, '18.2.0');
+  assert.equal(result.get('react').versionMajor, 18);
+  assert.ok(result.has('react-dom'), 'should have react-dom');
+});
+
+test('PnpmLockfileParser v6: strips peer-dep suffix from version', () => {
+  const result = pnpmLockfileParser.parse(pnpmV6Lockfile);
+  // react-dom has "(react@18.2.0)" suffix — must be stripped
+  assert.equal(result.get('react-dom').versionResolved, '18.2.0');
+  assert.equal(result.get('react-dom').versionMajor, 18);
+});
+
+test('PnpmLockfileParser v6: parses scoped packages from devDependencies', () => {
+  const result = pnpmLockfileParser.parse(pnpmV6Lockfile);
+  assert.ok(result.has('@types/react'), 'should have @types/react');
+  assert.equal(result.get('@types/react').versionResolved, '18.0.28');
+  assert.ok(result.has('lodash'), 'should have lodash');
+  assert.equal(result.get('lodash').versionResolved, '4.17.21');
+});
+
+// ─── PnpmLockfileParser — v5 monorepo format ─────────────────────────────────
+
+const pnpmV5MonoLockfile = [
+  'lockfileVersion: 5.3',
+  '',
+  'importers:',
+  '',
+  '  .:',
+  '    specifiers:',
+  '      react: ^18.0.0',
+  '      lodash: ^4.17.21',
+  '    dependencies:',
+  '      react: 18.2.0',
+  '      lodash: 4.17.21',
+  '    devDependencies:',
+  '      typescript: 5.0.4',
+].join('\n');
+
+test('PnpmLockfileParser v5 monorepo: parses direct version values', () => {
+  const result = pnpmLockfileParser.parse(pnpmV5MonoLockfile);
+  assert.ok(result.has('react'), 'should have react');
+  assert.equal(result.get('react').versionResolved, '18.2.0');
+  assert.ok(result.has('lodash'), 'should have lodash');
+  assert.equal(result.get('lodash').versionResolved, '4.17.21');
+});
+
+test('PnpmLockfileParser v5 monorepo: specifiers section is not parsed as versions', () => {
+  const result = pnpmLockfileParser.parse(pnpmV5MonoLockfile);
+  // lodash should be 4.17.21, NOT "^4.17.21" from specifiers
+  assert.equal(result.get('lodash').versionResolved, '4.17.21');
+});
+
+test('PnpmLockfileParser v5 monorepo: devDependencies included', () => {
+  const result = pnpmLockfileParser.parse(pnpmV5MonoLockfile);
+  assert.ok(result.has('typescript'), 'should have typescript');
+  assert.equal(result.get('typescript').versionResolved, '5.0.4');
+});
+
+// ─── PnpmLockfileParser — v5 single-package (no importers block) ─────────────
+
+const pnpmV5SingleLockfile = [
+  'lockfileVersion: 5.3',
+  '',
+  'specifiers:',
+  '  chalk: ^5.0.0',
+  '  commander: ^12.0.0',
+  '',
+  'dependencies:',
+  '  chalk: 5.3.0',
+  '  commander: 12.1.0',
+  '',
+  'devDependencies:',
+  '  typescript: 5.0.4',
+].join('\n');
+
+test('PnpmLockfileParser v5 single-package: parses top-level dependencies', () => {
+  const result = pnpmLockfileParser.parse(pnpmV5SingleLockfile);
+  assert.ok(result.has('chalk'), 'should have chalk');
+  assert.equal(result.get('chalk').versionResolved, '5.3.0');
+  assert.equal(result.get('chalk').versionMajor, 5);
+  assert.equal(result.get('chalk').versionMinor, 3);
+  assert.ok(result.has('commander'), 'should have commander');
+});
+
+test('PnpmLockfileParser v5 single-package: specifiers section is skipped', () => {
+  const result = pnpmLockfileParser.parse(pnpmV5SingleLockfile);
+  // chalk should resolve to 5.3.0, not "^5.0.0" from specifiers
+  assert.equal(result.get('chalk').versionResolved, '5.3.0');
+});
+
+test('PnpmLockfileParser v5 single-package: devDependencies included', () => {
+  const result = pnpmLockfileParser.parse(pnpmV5SingleLockfile);
+  assert.ok(result.has('typescript'), 'should have typescript from devDeps');
+  assert.equal(result.get('typescript').versionResolved, '5.0.4');
+});
+
+// ─── PnpmLockfileParser — peer suffix stripping ───────────────────────────────
+
+test('PnpmLockfileParser: complex peer suffix is fully stripped', () => {
+  const lockfile = [
+    "lockfileVersion: '6.0'",
+    'importers:',
+    '  .:',
+    '    dependencies:',
+    '      some-lib:',
+    '        specifier: ^1.0.0',
+    '        version: 1.2.3(@types/react@18.0.28)(react@18.2.0)(react-dom@18.2.0)',
+  ].join('\n');
+  const result = pnpmLockfileParser.parse(lockfile);
+  const dep = result.get('some-lib');
+  assert.ok(dep, 'should have some-lib');
+  assert.equal(dep.versionResolved, '1.2.3');
+  assert.equal(dep.versionMajor, 1);
+  assert.equal(dep.versionMinor, 2);
+  assert.equal(dep.versionPatch, 3);
+});
+
+test('PnpmLockfileParser: prerelease version is preserved after peer-suffix strip', () => {
+  const lockfile = [
+    "lockfileVersion: '6.0'",
+    'importers:',
+    '  .:',
+    '    dependencies:',
+    '      my-lib:',
+    '        specifier: ^2.0.0-beta.1',
+    '        version: 2.0.0-beta.1(react@18.2.0)',
+  ].join('\n');
+  const result = pnpmLockfileParser.parse(lockfile);
+  const dep = result.get('my-lib');
+  assert.ok(dep, 'should have my-lib');
+  assert.equal(dep.versionResolved, '2.0.0-beta.1');
+  assert.equal(dep.versionPrerelease, 'beta.1');
+  assert.equal(dep.versionIsPrerelease, true);
+});
+
+// ─── PnpmLockfileParser — edge cases ─────────────────────────────────────────
+
+test('PnpmLockfileParser: returns empty map for empty string', () => {
+  const result = pnpmLockfileParser.parse('');
+  assert.equal(result.size, 0);
+});
+
+test('PnpmLockfileParser: returns empty map for non-YAML content', () => {
+  const result = pnpmLockfileParser.parse('not a yaml file }{');
+  assert.equal(result.size, 0);
+});
+
+test('PnpmLockfileParser: returns empty map when no importers or deps section', () => {
+  const result = pnpmLockfileParser.parse('lockfileVersion: 6.0\n\npackages:\n  react: {}\n');
+  assert.equal(result.size, 0);
+});
+
+test('PnpmLockfileParser: monorepo with other importers does not pollute root deps', () => {
+  const lockfile = [
+    "lockfileVersion: '6.0'",
+    'importers:',
+    '  .:',
+    '    dependencies:',
+    '      react:',
+    '        specifier: ^18.2.0',
+    '        version: 18.2.0',
+    '  apps/web:',
+    '    dependencies:',
+    '      vue:',
+    '        specifier: ^3.0.0',
+    '        version: 3.3.4',
+  ].join('\n');
+  const result = pnpmLockfileParser.parse(lockfile);
+  assert.ok(result.has('react'), 'should have react from root');
+  assert.ok(!result.has('vue'), 'should NOT have vue from apps/web importer');
 });

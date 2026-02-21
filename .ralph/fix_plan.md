@@ -37,7 +37,7 @@ defined (2.1). Tasks 2.2–2.4 can be done in any order. Task 2.5 requires 2.1�
 
 - [x] **2.1** Design lockfile interface + implement `package-lock.json` (npm) parser
       — see SPEC.md §Lockfile Parsing
-- [ ] **2.2** Implement `pnpm-lock.yaml` parser
+- [x] **2.2** Implement `pnpm-lock.yaml` parser
 - [ ] **2.3** Implement `yarn.lock` v1 parser (custom text format)
 - [ ] **2.4** Implement `yarn.lock` Berry (v2+) parser (YAML format)
 - [ ] **2.5** Integrate lockfile resolver into scanner:
