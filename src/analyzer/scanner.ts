@@ -32,6 +32,8 @@ export interface ScanOptions {
    * Omit to disable caching.
    */
   cacheDir?: string;
+  /** Pre-computed stable identity key; avoids duplicate git calls inside the scanner. */
+  projectSlug?: string;
 }
 
 export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
@@ -108,6 +110,7 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
     id: randomUUID(),
     projectPath,
     projectName: basename(projectPath),
+    projectSlug: opts.projectSlug ?? basename(projectPath),
     scannedAt: new Date().toISOString(),
     targetPackages,
     fileCount: files.length,

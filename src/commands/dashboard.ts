@@ -17,7 +17,8 @@
 import chalk from 'chalk';
 import { resolve } from 'path';
 import { loadConfig } from '../config';
-import { loadLatestScanResult } from '../storage';
+import { computeProjectSlug } from '../analyzer/project-identity';
+import { createStorageBackend } from '../storage/index';
 import type { ScanResult, PackageSummary, ProjectMeta } from '../types';
 
 export interface DashboardCommandOptions {
@@ -34,8 +35,9 @@ export async function runDashboard(projectPaths: string[], opts: DashboardComman
   for (const p of paths) {
     const projectPath = resolve(p);
     const config = loadConfig(projectPath);
-    const outputDir = resolve(projectPath, opts.output ?? config.outputDir);
-    const result = loadLatestScanResult(outputDir);
+    const projectSlug = computeProjectSlug(projectPath);
+    const backend = createStorageBackend(projectPath, projectSlug, opts, config);
+    const result = backend.loadLatest();
     if (result) {
       results.push(result);
     } else {

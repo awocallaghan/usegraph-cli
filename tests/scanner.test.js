@@ -243,6 +243,7 @@ test('scanProject result has expected metadata fields', async () => {
     assert.ok(result.id,          'should have an id');
     assert.ok(result.projectPath, 'should have projectPath');
     assert.ok(result.projectName, 'should have projectName');
+    assert.ok(result.projectSlug, 'should have projectSlug');
     assert.ok(result.scannedAt,   'should have scannedAt ISO string');
     assert.ok(new Date(result.scannedAt).getFullYear() >= 2024,
       'scannedAt should be a valid recent date');

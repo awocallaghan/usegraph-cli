@@ -5,7 +5,7 @@
  *   usegraph scan [path]
  *     --packages <pkg1,pkg2,...>   packages to track in detail
  *     --config <path>             path to config file
- *     --output <dir>              output directory (default: .usegraph)
+ *     --output <dir>              output directory (default: ~/.usegraph/<slug>)
  *     --concurrency <n>           parallel file workers (default: 8)
  *     --json                      print raw JSON result to stdout
  */
@@ -14,7 +14,8 @@ import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { loadConfig } from '../config';
 import { scanProject } from '../analyzer';
-import { saveScanResult } from '../storage';
+import { computeProjectSlug } from '../analyzer/project-identity';
+import { createStorageBackend } from '../storage/index';
 import type { ScanResult } from '../types';
 
 export interface ScanCommandOptions {
@@ -49,7 +50,9 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
     );
   }
 
-  const outputDir = resolve(projectPath, opts.output ?? config.outputDir);
+  const projectSlug = computeProjectSlug(projectPath);
+  const backend = createStorageBackend(projectPath, projectSlug, opts, config);
+  const cacheDir = backend.getCacheDir();
 
   const rawConcurrency = opts.concurrency !== undefined ? Number(opts.concurrency) : 8;
   const concurrency = Number.isFinite(rawConcurrency) && rawConcurrency >= 1
@@ -59,12 +62,14 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
     console.warn(chalk.yellow(`Warning: Invalid --concurrency value "${opts.concurrency}", using default of 8.`));
   }
 
+  const isGlobal = !opts.output && !config.outputDir;
+
   console.log(chalk.bold('usegraph scan'));
   console.log(chalk.dim(`  Project:  ${projectPath}`));
   if (targetPackages.length > 0) {
     console.log(chalk.dim(`  Packages: ${targetPackages.join(', ')}`));
   }
-  console.log(chalk.dim(`  Output:   ${outputDir}`));
+  console.log(chalk.dim(`  Output:   ${cacheDir}${isGlobal ? chalk.dim(' (global)') : ''}`));
   console.log('');
 
   let lastLine = '';
@@ -80,7 +85,8 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
     targetPackages,
     config,
     concurrency,
-    cacheDir: outputDir,
+    cacheDir,
+    projectSlug,
     onProgress: (done, total, file, cached) => {
       clearLast();
       const suffix = cached ? chalk.dim(' [cache]') : '';
@@ -103,12 +109,12 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
     return;
   }
 
-  const savedPath = saveScanResult(outputDir, result);
+  backend.save(result);
 
   const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
   printScanSummary(result, elapsedSec);
   console.log('');
-  console.log(chalk.green(`✓ Results saved to ${savedPath}`));
+  console.log(chalk.green(`✓ Results saved to ${cacheDir}`));
   console.log(chalk.dim(`  Run ${chalk.bold('usegraph report')} to view the analysis.`));
 }
 

@@ -7,7 +7,8 @@ import { runReport } from './commands/report';
 import { runDashboard } from './commands/dashboard';
 import { runServe } from './commands/serve';
 import { loadConfig, writeDefaultConfig } from './config';
-import { listScans } from './storage';
+import { computeProjectSlug } from './analyzer/project-identity';
+import { createStorageBackend } from './storage/index';
 
 function getVersion(): string {
   try {
@@ -37,7 +38,7 @@ export function createCli(): Command {
     .description('Scan a project and record detailed package usage')
     .option('-p, --packages <packages>', 'Comma-separated list of packages to track')
     .option('-c, --config <path>', 'Path to usegraph config file')
-    .option('-o, --output <dir>', 'Output directory for results (default: .usegraph)')
+    .option('-o, --output <dir>', 'Output directory for results (default: ~/.usegraph/<slug>)')
     .option('--concurrency <n>', 'Number of files to analyse in parallel (default: 8)')
     .option('--json', 'Print raw JSON result to stdout instead of saving')
     .action(async (path: string | undefined, opts) => {
@@ -56,7 +57,7 @@ export function createCli(): Command {
     .description('Show a terminal report of the latest scan results')
     .option('-s, --scan <id>', 'Load a specific scan by ID instead of the latest')
     .option('--package <package>', 'Filter output to a single package')
-    .option('-o, --output <dir>', 'Output directory where results are stored (default: .usegraph)')
+    .option('-o, --output <dir>', 'Output directory where results are stored (default: ~/.usegraph/<slug>)')
     .option('--files', 'Show file-level usage breakdown')
     .option('--json', 'Print raw JSON to stdout')
     .action(async (path: string | undefined, opts) => {
@@ -74,7 +75,7 @@ export function createCli(): Command {
     .command('dashboard [paths...]')
     .description('Show aggregated usage dashboard across one or more projects')
     .option('--package <package>', 'Filter to a specific package')
-    .option('-o, --output <dir>', 'Scan output dir within each project (default: .usegraph)')
+    .option('-o, --output <dir>', 'Scan output dir within each project (default: ~/.usegraph/<slug>)')
     .option('--json', 'Print raw JSON to stdout')
     .action(async (paths: string[], opts) => {
       try {
@@ -92,7 +93,7 @@ export function createCli(): Command {
     .description('Launch a local web dashboard to visualise scan results in the browser')
     .option('-p, --port <n>', 'Port to listen on (default: 3000)')
     .option('--open', 'Open the dashboard in the default browser automatically')
-    .option('-o, --output <dir>', 'Scan output dir within each project (default: .usegraph)')
+    .option('-o, --output <dir>', 'Scan output dir within each project (default: ~/.usegraph/<slug>)')
     .action(async (paths: string[], opts) => {
       try {
         await runServe(paths, opts);
@@ -128,17 +129,19 @@ export function createCli(): Command {
   program
     .command('scans [path]')
     .description('List all saved scans for a project')
-    .option('-o, --output <dir>', 'Output directory (default: .usegraph)')
+    .option('-o, --output <dir>', 'Output directory (default: ~/.usegraph/<slug>)')
     .action((path: string | undefined, opts: { output?: string }) => {
       const projectPath = resolve(path ?? process.cwd());
       const config = loadConfig(projectPath);
-      const outputDir = resolve(projectPath, opts.output ?? config.outputDir);
-      const ids = listScans(outputDir);
+      const projectSlug = computeProjectSlug(projectPath);
+      const backend = createStorageBackend(projectPath, projectSlug, opts, config);
+      const ids = backend.list();
+      const storeDir = backend.getCacheDir();
       if (ids.length === 0) {
         console.log('No scans found. Run usegraph scan first.');
       } else {
-        console.log(`Saved scans in ${outputDir}:`);
-        ids.forEach((id) => console.log(`  ${id}`));
+        console.log(`Saved scans in ${storeDir}:`);
+        ids.forEach((id: string) => console.log(`  ${id}`));
       }
     });
 

@@ -12,7 +12,8 @@
 import chalk from 'chalk';
 import { resolve } from 'path';
 import { loadConfig } from '../config';
-import { loadLatestScanResult, loadScanResult } from '../storage';
+import { computeProjectSlug } from '../analyzer/project-identity';
+import { createStorageBackend } from '../storage/index';
 import type { ScanResult, ComponentUsage, FunctionCallInfo } from '../types';
 
 export interface ReportCommandOptions {
@@ -26,19 +27,20 @@ export interface ReportCommandOptions {
 export async function runReport(projectPathArg: string | undefined, opts: ReportCommandOptions): Promise<void> {
   const projectPath = resolve(projectPathArg ?? process.cwd());
   const config = loadConfig(projectPath);
-  const outputDir = resolve(projectPath, opts.output ?? config.outputDir);
+  const projectSlug = computeProjectSlug(projectPath);
+  const backend = createStorageBackend(projectPath, projectSlug, opts, config);
 
   let result: ScanResult | null;
   if (opts.scan) {
-    result = loadScanResult(outputDir, opts.scan);
+    result = backend.load(opts.scan);
     if (!result) {
-      console.error(chalk.red(`Scan "${opts.scan}" not found in ${outputDir}`));
+      console.error(chalk.red(`Scan "${opts.scan}" not found in ${backend.getCacheDir()}`));
       process.exit(1);
     }
   } else {
-    result = loadLatestScanResult(outputDir);
+    result = backend.loadLatest();
     if (!result) {
-      console.error(chalk.red(`No scan results found in ${outputDir}`));
+      console.error(chalk.red(`No scan results found in ${backend.getCacheDir()}`));
       console.error(chalk.dim(`Run ${chalk.bold('usegraph scan')} first.`));
       process.exit(1);
     }

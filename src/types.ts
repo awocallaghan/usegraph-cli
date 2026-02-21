@@ -109,6 +109,8 @@ export interface ScanResult {
   id: string;
   projectPath: string;
   projectName: string;
+  /** Stable cross-scan identity key (e.g. "github.com/org/repo" or "my-pkg") */
+  projectSlug: string;
   scannedAt: string;
   /** Packages whose usage was tracked in detail */
   targetPackages: string[];
