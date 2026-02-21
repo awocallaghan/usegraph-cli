@@ -9,7 +9,14 @@
  */
 import { existsSync, readFileSync } from 'fs';
 import { join, relative } from 'path';
-import type { DependencyEntry, ProjectMeta, ToolingInfo } from '../types';
+import type { DependencyEntry, ProjectMeta, ToolingMeta } from '../types';
+
+// Internal type — not exported; used by the legacy config-file detection table
+interface ToolingInfo {
+  name: string;
+  configFile: string;
+  settings: Record<string, unknown> | null;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tooling detection table
@@ -194,23 +201,209 @@ export function analyzeProjectMeta(projectPath: string): ProjectMeta {
     }
   }
 
-  const tooling = detectTooling(projectPath);
-
-  // Check package.json inline config sections (jest, eslintConfig, prettier, workspaces)
-  if (parsedPkg) {
-    const extraTooling = detectToolingFromPackageJson(parsedPkg, projectPath);
-    for (const t of extraTooling) {
-      if (!tooling.some((existing) => existing.name === t.name)) {
-        tooling.push(t);
-      }
-    }
-  }
+  const tooling = buildToolingMeta(projectPath, dependencies, parsedPkg);
 
   return { packageName, packageVersion, dependencies, tooling };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tooling detection
+// Flat ToolingMeta builder
+// ─────────────────────────────────────────────────────────────────────────────
+
+function hasDep(deps: DependencyEntry[], name: string): boolean {
+  return deps.some((d) => d.name === name);
+}
+
+function fileExists(projectPath: string, ...candidates: string[]): boolean {
+  return candidates.some((c) => existsSync(join(projectPath, c)));
+}
+
+function depVersion(deps: DependencyEntry[], name: string): string | null {
+  return deps.find((d) => d.name === name)?.versionRange ?? null;
+}
+
+function buildToolingMeta(
+  projectPath: string,
+  deps: DependencyEntry[],
+  parsedPkg: Record<string, unknown> | null,
+): ToolingMeta {
+  // Package manager — lockfile presence wins
+  let packageManager: string | null = null;
+  if (fileExists(projectPath, 'pnpm-lock.yaml')) packageManager = 'pnpm';
+  else if (fileExists(projectPath, 'bun.lockb', 'bun.lock')) packageManager = 'bun';
+  else if (fileExists(projectPath, 'yarn.lock')) packageManager = 'yarn';
+  else if (fileExists(projectPath, 'package-lock.json')) packageManager = 'npm';
+
+  // Build tool — config file, then devDep fallback
+  let buildTool: string | null = null;
+  if (fileExists(projectPath, 'vite.config.js', 'vite.config.ts', 'vite.config.mjs'))
+    buildTool = 'vite';
+  else if (
+    fileExists(
+      projectPath,
+      'webpack.config.js',
+      'webpack.config.ts',
+      'webpack.config.mjs',
+      'webpack.config.cjs',
+    )
+  )
+    buildTool = 'webpack';
+  else if (
+    hasDep(deps, 'esbuild') ||
+    fileExists(projectPath, 'esbuild.config.js', 'esbuild.config.ts')
+  )
+    buildTool = 'esbuild';
+  else if (
+    fileExists(projectPath, 'rollup.config.js', 'rollup.config.ts', 'rollup.config.mjs')
+  )
+    buildTool = 'rollup';
+
+  // Test framework — devDep
+  let testFramework: string | null = null;
+  if (hasDep(deps, 'vitest')) testFramework = 'vitest';
+  else if (hasDep(deps, 'jest') || hasDep(deps, '@jest/core')) testFramework = 'jest';
+  else if (hasDep(deps, 'mocha')) testFramework = 'mocha';
+  else if (hasDep(deps, 'jasmine')) testFramework = 'jasmine';
+
+  // Linter
+  let linter: string | null = null;
+  if (
+    fileExists(
+      projectPath,
+      'eslint.config.js',
+      'eslint.config.ts',
+      'eslint.config.mjs',
+      '.eslintrc',
+      '.eslintrc.json',
+      '.eslintrc.js',
+      '.eslintrc.yml',
+      '.eslintrc.yaml',
+    )
+  )
+    linter = 'eslint';
+  else if (fileExists(projectPath, 'biome.json') || hasDep(deps, '@biomejs/biome'))
+    linter = 'biome';
+  else if (hasDep(deps, 'oxlint')) linter = 'oxlint';
+
+  // Formatter
+  let formatter: string | null = null;
+  if (
+    fileExists(
+      projectPath,
+      '.prettierrc',
+      '.prettierrc.json',
+      '.prettierrc.yml',
+      '.prettierrc.yaml',
+      '.prettierrc.js',
+      'prettier.config.js',
+      'prettier.config.ts',
+    ) ||
+    hasDep(deps, 'prettier')
+  )
+    formatter = 'prettier';
+  else if (fileExists(projectPath, 'biome.json') || hasDep(deps, '@biomejs/biome'))
+    formatter = 'biome';
+
+  // CSS approach
+  let cssApproach: string | null = null;
+  if (
+    fileExists(
+      projectPath,
+      'tailwind.config.js',
+      'tailwind.config.ts',
+      'tailwind.config.mjs',
+      'tailwind.config.cjs',
+    ) ||
+    hasDep(deps, 'tailwindcss')
+  )
+    cssApproach = 'tailwind';
+  else if (hasDep(deps, 'styled-components')) cssApproach = 'styled-components';
+  else if (hasDep(deps, '@emotion/react') || hasDep(deps, '@emotion/styled'))
+    cssApproach = 'emotion';
+
+  // TypeScript
+  let typescript: boolean | null = null;
+  let typescriptVersion: string | null = null;
+  if (fileExists(projectPath, 'tsconfig.json') || hasDep(deps, 'typescript')) {
+    typescript = true;
+    typescriptVersion = depVersion(deps, 'typescript');
+  }
+
+  // Node version — .nvmrc / .node-version / package.json engines.node
+  let nodeVersion: string | null = null;
+  const nvmrcPath = join(projectPath, '.nvmrc');
+  const nodeVersionPath = join(projectPath, '.node-version');
+  if (existsSync(nvmrcPath)) {
+    try {
+      nodeVersion = readFileSync(nvmrcPath, 'utf-8').trim() || null;
+    } catch {
+      /* ignore */
+    }
+  } else if (existsSync(nodeVersionPath)) {
+    try {
+      nodeVersion = readFileSync(nodeVersionPath, 'utf-8').trim() || null;
+    } catch {
+      /* ignore */
+    }
+  } else if (parsedPkg?.engines && typeof parsedPkg.engines === 'object') {
+    const engines = parsedPkg.engines as Record<string, unknown>;
+    if (typeof engines.node === 'string') nodeVersion = engines.node;
+  }
+
+  // Framework — config file or dep
+  let framework: string | null = null;
+  let frameworkVersion: string | null = null;
+  if (
+    fileExists(
+      projectPath,
+      'next.config.js',
+      'next.config.ts',
+      'next.config.mjs',
+      'next.config.cjs',
+    ) ||
+    hasDep(deps, 'next')
+  ) {
+    framework = 'next';
+    frameworkVersion = depVersion(deps, 'next');
+  } else if (
+    fileExists(projectPath, 'nuxt.config.js', 'nuxt.config.ts', 'nuxt.config.mjs') ||
+    hasDep(deps, 'nuxt')
+  ) {
+    framework = 'nuxt';
+    frameworkVersion = depVersion(deps, 'nuxt');
+  } else if (hasDep(deps, 'react')) {
+    framework = 'react';
+    frameworkVersion = depVersion(deps, 'react');
+  } else if (hasDep(deps, 'vue')) {
+    framework = 'vue';
+    frameworkVersion = depVersion(deps, 'vue');
+  } else if (hasDep(deps, '@angular/core')) {
+    framework = 'angular';
+    frameworkVersion = depVersion(deps, '@angular/core');
+  } else if (hasDep(deps, 'svelte')) {
+    framework = 'svelte';
+    frameworkVersion = depVersion(deps, 'svelte');
+  }
+
+  return {
+    packageManager,
+    packageManagerVersion: null, // populated in Phase 2 (lockfile parsing)
+    buildTool,
+    testFramework,
+    bundler: null,
+    linter,
+    formatter,
+    cssApproach,
+    typescript,
+    typescriptVersion,
+    nodeVersion,
+    framework,
+    frameworkVersion,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Legacy config-file detection (kept for internal use / future reference)
 // ─────────────────────────────────────────────────────────────────────────────
 
 function detectTooling(projectPath: string): ToolingInfo[] {

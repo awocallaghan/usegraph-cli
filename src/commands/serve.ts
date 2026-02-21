@@ -511,9 +511,20 @@ const DASHBOARD_JS = `
     for (var i = 0; i < results.length; i++) {
       projectNames.push(results[i].projectName);
       if (!results[i].meta) continue;
-      var tooling = results[i].meta.tooling;
-      for (var t = 0; t < tooling.length; t++) {
-        var tname = tooling[t].name;
+      var tm = results[i].meta.tooling;
+      var toolFields = [
+        ['Framework', tm.framework],
+        ['Pkg Mgr', tm.packageManager],
+        ['Build Tool', tm.buildTool],
+        ['Test', tm.testFramework],
+        ['Linter', tm.linter],
+        ['Formatter', tm.formatter],
+        ['CSS', tm.cssApproach],
+        ['TypeScript', tm.typescript ? 'yes' : null],
+      ];
+      for (var tf = 0; tf < toolFields.length; tf++) {
+        if (!toolFields[tf][1]) continue;
+        var tname = toolFields[tf][0] + ': ' + toolFields[tf][1];
         if (!toolMap[tname]) toolMap[tname] = {};
         toolMap[tname][results[i].projectName] = true;
       }

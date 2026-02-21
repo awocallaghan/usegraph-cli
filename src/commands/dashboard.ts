@@ -183,9 +183,22 @@ function buildToolMatrix(results: Array<{ projectName: string; meta?: ProjectMet
   const matrix = new Map<string, Set<string>>();
   for (const r of results) {
     if (!r.meta) continue;
-    for (const tool of r.meta.tooling) {
-      if (!matrix.has(tool.name)) matrix.set(tool.name, new Set());
-      matrix.get(tool.name)!.add(r.projectName);
+    const t = r.meta.tooling;
+    const fields: Array<[string, string | null | boolean]> = [
+      ['Framework', t.framework],
+      ['Package Manager', t.packageManager],
+      ['Build Tool', t.buildTool],
+      ['Test Framework', t.testFramework],
+      ['Linter', t.linter],
+      ['Formatter', t.formatter],
+      ['CSS', t.cssApproach],
+      ['TypeScript', t.typescript ? 'yes' : null],
+    ];
+    for (const [label, value] of fields) {
+      if (!value) continue;
+      const key = `${label}: ${value}`;
+      if (!matrix.has(key)) matrix.set(key, new Set());
+      matrix.get(key)!.add(r.projectName);
     }
   }
   // Sort by how many projects use this tool (desc)

@@ -14,7 +14,7 @@ import { resolve } from 'path';
 import { loadConfig } from '../config';
 import { computeProjectSlug } from '../analyzer/project-identity';
 import { createStorageBackend } from '../storage/index';
-import type { ScanResult, ComponentUsage, FunctionCallInfo } from '../types';
+import type { ScanResult, ComponentUsage, FunctionCallInfo, ToolingMeta } from '../types';
 
 export interface ReportCommandOptions {
   scan?: string;
@@ -181,10 +181,11 @@ function printReport(result: ScanResult, opts: ReportCommandOptions): void {
   if (result.meta && !pkgFilter) {
     const { meta } = result;
 
-    if (meta.tooling.length > 0) {
+    const toolEntries = toolingMetaToRows(meta.tooling);
+    if (toolEntries.length > 0) {
       console.log(chalk.bold('Detected tooling:'));
-      for (const tool of meta.tooling) {
-        console.log(`  ${chalk.green('✓')} ${tool.name.padEnd(20)} ${chalk.dim(tool.configFile)}`);
+      for (const [label, value] of toolEntries) {
+        console.log(`  ${chalk.green('✓')} ${label.padEnd(20)} ${chalk.dim(value)}`);
       }
       console.log('');
     }
@@ -234,6 +235,22 @@ function groupFunctionsByName(
     }
   }
   return new Map([...map.entries()].sort((a, b) => b[1].length - a[1].length));
+}
+
+/** Convert flat ToolingMeta to display-friendly [label, value] pairs (non-null only) */
+function toolingMetaToRows(t: ToolingMeta): Array<[string, string]> {
+  const rows: Array<[string, string]> = [];
+  if (t.framework)
+    rows.push(['Framework', t.frameworkVersion ? `${t.framework} ${t.frameworkVersion}` : t.framework]);
+  if (t.packageManager) rows.push(['Package Manager', t.packageManager]);
+  if (t.buildTool) rows.push(['Build Tool', t.buildTool]);
+  if (t.testFramework) rows.push(['Test Framework', t.testFramework]);
+  if (t.linter) rows.push(['Linter', t.linter]);
+  if (t.formatter) rows.push(['Formatter', t.formatter]);
+  if (t.cssApproach) rows.push(['CSS', t.cssApproach]);
+  if (t.typescript !== null) rows.push(['TypeScript', t.typescriptVersion ?? 'yes']);
+  if (t.nodeVersion) rows.push(['Node', t.nodeVersion]);
+  return rows;
 }
 
 function buildPropFrequency(usages: ComponentUsage[]): Array<{ prop: string; count: number }> {

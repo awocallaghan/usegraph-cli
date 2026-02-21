@@ -146,14 +146,34 @@ export interface DependencyEntry {
   section: 'dependencies' | 'devDependencies' | 'peerDependencies' | 'optionalDependencies';
 }
 
-/** A detected tooling configuration file */
-export interface ToolingInfo {
-  /** Human-readable tool name (e.g. "TypeScript", "ESLint") */
-  name: string;
-  /** Path to the config file, relative to project root */
-  configFile: string;
-  /** Key settings extracted from JSON-based configs; null for JS configs */
-  settings: Record<string, unknown> | null;
+/** Flat tooling detection result replacing the old ToolingInfo[] array */
+export interface ToolingMeta {
+  /** "npm" | "yarn" | "pnpm" | "bun" — detected by lockfile presence */
+  packageManager: string | null;
+  /** Package manager version (resolved from lockfile; populated in Phase 2) */
+  packageManagerVersion: string | null;
+  /** "vite" | "webpack" | "esbuild" | "rollup" */
+  buildTool: string | null;
+  /** "jest" | "vitest" | "mocha" | "jasmine" */
+  testFramework: string | null;
+  /** Bundler when distinct from buildTool (reserved; null for now) */
+  bundler: string | null;
+  /** "eslint" | "biome" | "oxlint" */
+  linter: string | null;
+  /** "prettier" | "biome" */
+  formatter: string | null;
+  /** "tailwind" | "css-modules" | "styled-components" | "emotion" */
+  cssApproach: string | null;
+  /** true if tsconfig.json present or typescript devDep found */
+  typescript: boolean | null;
+  /** TypeScript version range from package.json (resolved SHA in Phase 2) */
+  typescriptVersion: string | null;
+  /** Node version from .nvmrc / .node-version / package.json engines */
+  nodeVersion: string | null;
+  /** "next" | "nuxt" | "react" | "vue" | "angular" | "svelte" */
+  framework: string | null;
+  /** Framework version range from package.json */
+  frameworkVersion: string | null;
 }
 
 /** Project metadata: package.json summary + detected tooling */
@@ -164,8 +184,8 @@ export interface ProjectMeta {
   packageVersion: string;
   /** All dependency entries (all sections combined) */
   dependencies: DependencyEntry[];
-  /** Detected tooling config files */
-  tooling: ToolingInfo[];
+  /** Flat tooling detection result */
+  tooling: ToolingMeta;
 }
 
 /** Configuration file schema (usegraph.config.json / .usegraphrc) */
