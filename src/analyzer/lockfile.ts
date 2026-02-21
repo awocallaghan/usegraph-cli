@@ -359,8 +359,129 @@ function countIndent(line: string): number {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// yarn — yarn.lock v1 (classic format)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Parser for yarn's classic `yarn.lock` v1 format.
+ *
+ * The v1 format is a custom text format (not valid YAML):
+ *  - Entry headers at column 0: `"<name>@<range>, <name>@<range>":` or `<name>@<range>:`
+ *  - Version field (indented): `  version "<resolved>"`
+ *  - Entries separated by blank lines
+ *
+ * A header can have multiple comma-separated specifiers for the same resolved
+ * version. All unique package names in the header are recorded with that version;
+ * first occurrence wins if the same name appears in multiple entries.
+ *
+ * Returns an empty map for Berry (v2+) content — Berry uses `version: x.y.z`
+ * without quotes, which does not match this parser's version pattern.
+ */
+export class YarnV1LockfileParser implements LockfileParser {
+  parse(lockfileContent: string): Map<string, ResolvedDependency> {
+    const result = new Map<string, ResolvedDependency>();
+    if (!lockfileContent.trim()) return result;
+
+    const lines = lockfileContent.split('\n');
+    let currentNames: string[] = [];
+    let currentVersion: string | null = null;
+
+    const flush = (): void => {
+      if (currentNames.length > 0 && currentVersion) {
+        for (const name of currentNames) {
+          if (!result.has(name)) {
+            result.set(name, makeResolved(name, currentVersion!));
+          }
+        }
+      }
+      currentNames = [];
+      currentVersion = null;
+    };
+
+    for (const line of lines) {
+      // Skip comment lines (# yarn lockfile v1, etc.)
+      if (line.startsWith('#')) continue;
+
+      const trimmed = line.trim();
+
+      // Blank line — commit current entry block
+      if (!trimmed) {
+        flush();
+        continue;
+      }
+
+      // Entry header: at column 0, ends with ':'
+      // Indented body lines (version, resolved, dependencies) are excluded by
+      // the startsWith(' ') / startsWith('\t') check.
+      if (!line.startsWith(' ') && !line.startsWith('\t') && trimmed.endsWith(':')) {
+        flush(); // commit previous entry if any
+
+        const header = trimmed.slice(0, -1); // strip trailing ':'
+        for (const spec of splitYarnSpecifiers(header)) {
+          const name = extractYarnPackageName(spec);
+          if (name && !currentNames.includes(name)) {
+            currentNames.push(name);
+          }
+        }
+        continue;
+      }
+
+      // Version field: `  version "1.2.3"` (indented, double-quoted)
+      // Note: Berry format uses `  version: 1.2.3` (no quotes) — won't match here.
+      if (trimmed.startsWith('version ') && currentNames.length > 0 && !currentVersion) {
+        const match = trimmed.match(/^version\s+"([^"]+)"/);
+        if (match) currentVersion = match[1];
+      }
+    }
+
+    flush(); // handle file that doesn't end with a blank line
+    return result;
+  }
+}
+
+/**
+ * Split a yarn.lock v1 entry header into individual package specifiers.
+ *
+ * Handles both forms:
+ *  - `"react@^18.0.0, react@^18.2.0"` (outer quotes wrapping multiple)
+ *  - `react@^18.0.0, react@^18.2.0` (no outer quotes)
+ *  - `"@types/react@^18.0.0"` (single scoped, outer-quoted)
+ */
+function splitYarnSpecifiers(header: string): string[] {
+  const stripped = header.replace(/^['"]|['"]$/g, ''); // strip outer quotes
+  return stripped.split(', ').map(s => s.trim().replace(/^['"]|['"]$/g, ''));
+}
+
+/**
+ * Extract the npm package name from a yarn.lock v1 specifier.
+ *
+ * Examples:
+ *  "react@^18.0.0"       → "react"
+ *  "@types/react@^18.0.0" → "@types/react"
+ *  "lodash@npm:lodash@^4" → "lodash"
+ */
+function extractYarnPackageName(specifier: string): string | null {
+  const s = specifier.trim().replace(/^['"]|['"]$/g, '');
+  if (!s) return null;
+
+  let atIdx: number;
+  if (s.startsWith('@')) {
+    // Scoped: skip the leading '@' and find the '@' that starts the version range
+    const slashIdx = s.indexOf('/');
+    if (slashIdx === -1) return null; // malformed scoped specifier
+    atIdx = s.indexOf('@', slashIdx + 1);
+  } else {
+    atIdx = s.indexOf('@');
+  }
+
+  if (atIdx <= 0) return null; // no version separator or empty name
+  return s.slice(0, atIdx);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Singleton instances
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const npmLockfileParser = new NpmLockfileParser();
 export const pnpmLockfileParser = new PnpmLockfileParser();
+export const yarnV1LockfileParser = new YarnV1LockfileParser();

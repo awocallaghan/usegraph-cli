@@ -4,7 +4,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSemver, npmLockfileParser, pnpmLockfileParser } = require('../dist/analyzer/lockfile');
+const { parseSemver, npmLockfileParser, pnpmLockfileParser, yarnV1LockfileParser } = require('../dist/analyzer/lockfile');
 
 // ─── parseSemver ──────────────────────────────────────────────────────────────
 
@@ -466,4 +466,128 @@ test('PnpmLockfileParser: monorepo with other importers does not pollute root de
   const result = pnpmLockfileParser.parse(lockfile);
   assert.ok(result.has('react'), 'should have react from root');
   assert.ok(!result.has('vue'), 'should NOT have vue from apps/web importer');
+});
+
+// ─── YarnV1LockfileParser ─────────────────────────────────────────────────────
+
+const yarnV1Fixture = [
+  '# yarn lockfile v1',
+  '',
+  'react@^17.0.0, react@^18.0.0, react@^18.2.0:',
+  '  version "18.2.0"',
+  '  resolved "https://registry.npmjs.org/react/-/react-18.2.0.tgz"',
+  '  integrity sha512-xxx',
+  '  dependencies:',
+  '    loose-envify "^1.1.0"',
+  '',
+  '"@types/react@^18.0.0":',
+  '  version "18.0.28"',
+  '  resolved "https://registry.npmjs.org/@types/react/-/@types-react-18.0.28.tgz"',
+  '  integrity sha512-yyy',
+  '',
+  'lodash@4.17.21, lodash@^4.0.0, lodash@^4.17.21:',
+  '  version "4.17.21"',
+  '  resolved "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"',
+  '  integrity sha512-zzz',
+  '',
+].join('\n');
+
+test('YarnV1LockfileParser: parses version from single-specifier entry', () => {
+  const result = yarnV1LockfileParser.parse(yarnV1Fixture);
+  assert.ok(result.has('react'), 'should have react');
+  assert.equal(result.get('react').versionResolved, '18.2.0');
+  assert.equal(result.get('react').versionMajor, 18);
+});
+
+test('YarnV1LockfileParser: multi-specifier header maps all ranges to same version', () => {
+  const result = yarnV1LockfileParser.parse(yarnV1Fixture);
+  // react@^17.0.0, react@^18.0.0, react@^18.2.0 all resolve to same entry
+  assert.equal(result.get('react').versionResolved, '18.2.0');
+  // result map should have exactly one entry for 'react'
+  assert.equal(result.size, 3); // react, @types/react, lodash
+});
+
+test('YarnV1LockfileParser: parses scoped package', () => {
+  const result = yarnV1LockfileParser.parse(yarnV1Fixture);
+  assert.ok(result.has('@types/react'), 'should have @types/react');
+  assert.equal(result.get('@types/react').versionResolved, '18.0.28');
+  assert.equal(result.get('@types/react').versionMajor, 18);
+  assert.equal(result.get('@types/react').versionMinor, 0);
+  assert.equal(result.get('@types/react').versionPatch, 28);
+});
+
+test('YarnV1LockfileParser: parses unscoped package with multiple ranges', () => {
+  const result = yarnV1LockfileParser.parse(yarnV1Fixture);
+  assert.ok(result.has('lodash'), 'should have lodash');
+  assert.equal(result.get('lodash').versionResolved, '4.17.21');
+});
+
+test('YarnV1LockfileParser: returns empty map for empty string', () => {
+  assert.equal(yarnV1LockfileParser.parse('').size, 0);
+});
+
+test('YarnV1LockfileParser: returns empty map for non-yarn content', () => {
+  assert.equal(yarnV1LockfileParser.parse('{ "not": "yarn" }').size, 0);
+});
+
+test('YarnV1LockfileParser: parses prerelease version', () => {
+  const lockfile = [
+    '# yarn lockfile v1',
+    '',
+    'my-lib@^2.0.0-beta.1:',
+    '  version "2.0.0-beta.1"',
+    '  resolved "https://registry.npmjs.org/my-lib/-/my-lib-2.0.0-beta.1.tgz"',
+    '',
+  ].join('\n');
+  const result = yarnV1LockfileParser.parse(lockfile);
+  const dep = result.get('my-lib');
+  assert.ok(dep, 'should have my-lib');
+  assert.equal(dep.versionResolved, '2.0.0-beta.1');
+  assert.equal(dep.versionPrerelease, 'beta.1');
+  assert.equal(dep.versionIsPrerelease, true);
+});
+
+test('YarnV1LockfileParser: first occurrence wins for same package name', () => {
+  // Unusual but possible: two entries resolving the same pkg to different versions
+  const lockfile = [
+    '# yarn lockfile v1',
+    '',
+    'react@^18.0.0:',
+    '  version "18.2.0"',
+    '',
+    'react@^17.0.0:',
+    '  version "17.0.2"',
+    '',
+  ].join('\n');
+  const result = yarnV1LockfileParser.parse(lockfile);
+  assert.equal(result.get('react').versionResolved, '18.2.0');
+});
+
+test('YarnV1LockfileParser: parses last entry even without trailing blank line', () => {
+  const lockfile = [
+    '# yarn lockfile v1',
+    '',
+    'react@^18.0.0:',
+    '  version "18.2.0"',
+    // no trailing blank line
+  ].join('\n');
+  const result = yarnV1LockfileParser.parse(lockfile);
+  assert.ok(result.has('react'), 'should parse entry without trailing newline');
+  assert.equal(result.get('react').versionResolved, '18.2.0');
+});
+
+test('YarnV1LockfileParser: returns empty map for Berry (v2+) format', () => {
+  // Berry uses `version: x.y.z` without quotes — won't match v1 pattern
+  const berryLockfile = [
+    '__metadata:',
+    '  version: 6',
+    '  cacheKey: 8',
+    '',
+    '"react@npm:^18.2.0":',
+    '  version: 18.2.0',
+    '  resolution: "react@npm:18.2.0"',
+    '  checksum: abc123',
+    '',
+  ].join('\n');
+  assert.equal(yarnV1LockfileParser.parse(berryLockfile).size, 0);
 });
