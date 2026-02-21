@@ -7,8 +7,9 @@
  * making repeated scans on large codebases significantly faster.
  */
 import fg from 'fast-glob';
-import { statSync } from 'fs';
-import { basename } from 'path';
+import { existsSync, readFileSync, statSync } from 'fs';
+import { basename, join } from 'path';
+import { spawnSync } from 'child_process';
 import { analyzeFile } from './file-analyzer';
 import { analyzeProjectMeta } from './meta-analyzer';
 import { loadFileCache, saveFileCache } from '../storage';
@@ -34,6 +35,38 @@ export interface ScanOptions {
   cacheDir?: string;
   /** Pre-computed stable identity key; avoids duplicate git calls inside the scanner. */
   projectSlug?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Git metadata helpers — return null on error (no git, no remote, etc.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function gitRaw(projectPath: string, args: string[]): string | null {
+  const result = spawnSync('git', ['-C', projectPath, ...args], { encoding: 'utf-8' });
+  if (result.error || result.status !== 0) return null;
+  return result.stdout.trim() || null;
+}
+
+function getRepoUrl(projectPath: string): string | null {
+  return gitRaw(projectPath, ['remote', 'get-url', 'origin']);
+}
+
+function getBranch(projectPath: string): string | null {
+  return gitRaw(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
+}
+
+function getCommitSha(projectPath: string): string | null {
+  return gitRaw(projectPath, ['rev-parse', 'HEAD']);
+}
+
+function readPackageJson(projectPath: string): Record<string, unknown> | null {
+  const pkgPath = join(projectPath, 'package.json');
+  if (!existsSync(pkgPath)) return null;
+  try {
+    return JSON.parse(readFileSync(pkgPath, 'utf-8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
@@ -108,10 +141,15 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
 
   return {
     id: randomUUID(),
+    schemaVersion: 1,
     projectPath,
     projectName: basename(projectPath),
     projectSlug: opts.projectSlug ?? basename(projectPath),
     scannedAt: new Date().toISOString(),
+    repoUrl: getRepoUrl(projectPath),
+    branch: getBranch(projectPath),
+    commitSha: getCommitSha(projectPath),
+    packageJson: readPackageJson(projectPath),
     targetPackages,
     fileCount: files.length,
     files: results,

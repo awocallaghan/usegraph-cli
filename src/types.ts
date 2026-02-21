@@ -107,11 +107,21 @@ export interface ScanSummary {
 export interface ScanResult {
   /** Unique ID for this scan (timestamp-based) */
   id: string;
+  /** Schema version for forward-compatibility. 1 = current extended schema. */
+  schemaVersion: number;
   projectPath: string;
   projectName: string;
   /** Stable cross-scan identity key (e.g. "github.com/org/repo" or "my-pkg") */
   projectSlug: string;
   scannedAt: string;
+  /** Raw git remote URL (e.g. "https://github.com/org/repo.git"); null if unavailable */
+  repoUrl: string | null;
+  /** Current git branch name; null if unavailable */
+  branch: string | null;
+  /** Full git commit SHA; null if unavailable */
+  commitSha: string | null;
+  /** Verbatim parsed package.json; null if absent or unparseable */
+  packageJson: Record<string, unknown> | null;
   /** Packages whose usage was tracked in detail */
   targetPackages: string[];
   fileCount: number;
