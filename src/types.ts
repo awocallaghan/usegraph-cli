@@ -29,6 +29,8 @@ export interface PropInfo {
   value: string | number | boolean | null;
   /** True when the value is a JS expression (not a literal) */
   isDynamic: boolean;
+  /** ~5 lines of source context around the usage site; null for static literals */
+  sourceSnippet: string | null;
 }
 
 /** A single usage of a tracked JSX component */
@@ -54,6 +56,8 @@ export interface ArgInfo {
   /** Literal value (present for string/number/boolean literals) */
   value?: string | number | boolean;
   isSpread: boolean;
+  /** ~5 lines of source context around the usage site; null for static literals */
+  sourceSnippet: string | null;
 }
 
 /** A single call to a tracked function */

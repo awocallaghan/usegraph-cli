@@ -44,9 +44,16 @@ export function extractFromAst(
   const importMap: ImportMap = new Map();
   const namespaceMap: NamespaceMap = new Map();
 
-  // Line/col helper: SWC span offsets are byte positions in the source
+  // SWC's BytePos is cumulative across all parse() calls in the same process.
+  // Subtract the module's base offset so span positions are relative to this source.
+  const moduleBase = (ast['span'] as { start: number } | undefined)?.start ?? 0;
   const lineStarts = buildLineStartIndex(source);
-  const getPos = (offset: number) => spanToLineCol(offset, lineStarts);
+  const getPos = (offset: number) => spanToLineCol(offset - moduleBase, lineStarts);
+
+  // Source lines pre-split once; used to build ~5-line snippets for dynamic values
+  const sourceLines = source.split('\n');
+  const getSnippet = (line: number): string =>
+    extractSnippet(sourceLines, line);
 
   // ----------------------------------------------------------------
   // Pass 1: collect all imports
@@ -123,7 +130,7 @@ export function extractFromAst(
       const { line, column } = span ? getPos(span.start) : { line: 0, column: 0 };
 
       const attributes = (node['attributes'] as AstNode[]) ?? [];
-      const props: PropInfo[] = extractJsxProps(attributes);
+      const props: PropInfo[] = extractJsxProps(attributes, getPos, getSnippet);
 
       componentUsages.push({
         file: filePath,
@@ -150,7 +157,7 @@ export function extractFromAst(
       const { line, column } = span ? getPos(span.start) : { line: 0, column: 0 };
 
       const argNodes = (node['arguments'] as AstNode[]) ?? [];
-      const args: ArgInfo[] = argNodes.map((a, i) => extractArg(a, i));
+      const args: ArgInfo[] = argNodes.map((a, i) => extractArg(a, i, getPos, getSnippet));
 
       functionCalls.push({
         file: filePath,
@@ -260,7 +267,11 @@ function resolveCallee(
 }
 
 /** Extract JSX attribute list into PropInfo[] */
-function extractJsxProps(attributes: AstNode[]): PropInfo[] {
+function extractJsxProps(
+  attributes: AstNode[],
+  getPos: (offset: number) => { line: number; column: number },
+  getSnippet: (line: number) => string,
+): PropInfo[] {
   const props: PropInfo[] = [];
   for (const attr of attributes) {
     if (attr.type !== 'JSXAttribute') continue;
@@ -277,7 +288,18 @@ function extractJsxProps(attributes: AstNode[]): PropInfo[] {
 
     const valueNode = attr['value'] as AstNode | null;
     const { value, isDynamic } = extractJsxAttrValue(valueNode);
-    props.push({ name: propName, value, isDynamic });
+
+    // Capture snippet for dynamic values using the attribute span
+    let sourceSnippet: string | null = null;
+    if (isDynamic) {
+      const span = attr['span'] as { start: number } | undefined;
+      if (span) {
+        const { line } = getPos(span.start);
+        sourceSnippet = getSnippet(line);
+      }
+    }
+
+    props.push({ name: propName, value, isDynamic, sourceSnippet });
   }
   return props;
 }
@@ -326,35 +348,48 @@ function extractExpressionValue(expr: AstNode): { value: PropInfo['value']; isDy
 }
 
 /** Extract a single function call argument */
-function extractArg(argNode: AstNode, index: number): ArgInfo {
+function extractArg(
+  argNode: AstNode,
+  index: number,
+  getPos: (offset: number) => { line: number; column: number },
+  getSnippet: (line: number) => string,
+): ArgInfo {
   const isSpread = !!(argNode['spread'] as unknown);
   const expr = argNode['expression'] as AstNode | undefined;
 
-  if (!expr) return { index, type: 'unknown', isSpread };
+  if (!expr) return { index, type: 'unknown', isSpread, sourceSnippet: null };
+
+  // Helper: snippet from the EXPRESSION span (ExprOrSpread wrapper has no span)
+  const snippetForArg = (): string | null => {
+    const span = (expr as Record<string, unknown>)['span'] as { start: number } | undefined;
+    if (!span) return null;
+    const { line } = getPos(span.start);
+    return getSnippet(line);
+  };
 
   switch (expr.type) {
     case 'StringLiteral':
-      return { index, type: 'string', value: expr['value'] as string, isSpread };
+      return { index, type: 'string', value: expr['value'] as string, isSpread, sourceSnippet: null };
     case 'NumericLiteral':
-      return { index, type: 'number', value: expr['value'] as number, isSpread };
+      return { index, type: 'number', value: expr['value'] as number, isSpread, sourceSnippet: null };
     case 'BooleanLiteral':
-      return { index, type: 'boolean', value: expr['value'] as boolean, isSpread };
+      return { index, type: 'boolean', value: expr['value'] as boolean, isSpread, sourceSnippet: null };
     case 'NullLiteral':
-      return { index, type: 'null', isSpread };
+      return { index, type: 'null', isSpread, sourceSnippet: null };
     case 'Identifier':
-      if (expr['value'] === 'undefined') return { index, type: 'undefined', isSpread };
-      return { index, type: 'identifier', value: expr['value'] as string, isSpread };
+      if (expr['value'] === 'undefined') return { index, type: 'undefined', isSpread, sourceSnippet: null };
+      return { index, type: 'identifier', value: expr['value'] as string, isSpread, sourceSnippet: snippetForArg() };
     case 'ObjectExpression':
-      return { index, type: 'object', isSpread };
+      return { index, type: 'object', isSpread, sourceSnippet: snippetForArg() };
     case 'ArrayExpression':
-      return { index, type: 'array', isSpread };
+      return { index, type: 'array', isSpread, sourceSnippet: snippetForArg() };
     case 'ArrowFunctionExpression':
     case 'FunctionExpression':
-      return { index, type: 'function', isSpread };
+      return { index, type: 'function', isSpread, sourceSnippet: snippetForArg() };
     case 'TemplateLiteral':
-      return { index, type: 'template', isSpread };
+      return { index, type: 'template', isSpread, sourceSnippet: snippetForArg() };
     default:
-      return { index, type: expr.type, isSpread };
+      return { index, type: expr.type, isSpread, sourceSnippet: snippetForArg() };
   }
 }
 
@@ -379,4 +414,15 @@ function spanToLineCol(offset: number, lineStarts: number[]): { line: number; co
     else hi = mid - 1;
   }
   return { line: lo + 1, column: offset - lineStarts[lo] + 1 };
+}
+
+/**
+ * Extract ~5 lines of source context centred on `line` (1-indexed).
+ * Returns lines [line-2 .. line+2] joined with '\n'.
+ */
+function extractSnippet(sourceLines: string[], line: number): string {
+  const idx = line - 1; // convert to 0-indexed
+  const start = Math.max(0, idx - 2);
+  const end = Math.min(sourceLines.length, idx + 3); // +3 so the target line + 2 after are included
+  return sourceLines.slice(start, end).join('\n');
 }

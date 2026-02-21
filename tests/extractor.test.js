@@ -322,3 +322,80 @@ test('collects multiple function calls in one file', async () => {
   assert.equal(functionCalls.filter(c => c.functionName === 'createTheme').length, 2);
   assert.equal(functionCalls.filter(c => c.functionName === 'createTokens').length, 1);
 });
+
+// ─── sourceSnippet ────────────────────────────────────────────────────────────
+
+test('dynamic JSX prop gets a non-null sourceSnippet containing the source line', async () => {
+  const src = `import { Button } from '@myds/button';
+const handler = () => {};
+const el = <Button onClick={handler} />;
+`;
+  const { componentUsages } = await extract(src, ['@myds/button'], true);
+  const onClickProp = componentUsages[0].props.find(p => p.name === 'onClick');
+  assert.ok(onClickProp, 'onClick prop should exist');
+  assert.equal(onClickProp.isDynamic, true);
+  assert.ok(onClickProp.sourceSnippet !== null, 'sourceSnippet should be set for dynamic prop');
+  assert.ok(
+    onClickProp.sourceSnippet.includes('onClick'),
+    'sourceSnippet should contain the prop name',
+  );
+});
+
+test('static JSX prop has sourceSnippet: null', async () => {
+  const src = `import { Button } from '@myds/button';
+const el = <Button variant="primary" />;
+`;
+  const { componentUsages } = await extract(src, ['@myds/button'], true);
+  const variantProp = componentUsages[0].props.find(p => p.name === 'variant');
+  assert.ok(variantProp, 'variant prop should exist');
+  assert.equal(variantProp.isDynamic, false);
+  assert.equal(variantProp.sourceSnippet, null);
+});
+
+test('dynamic function arg gets a non-null sourceSnippet', async () => {
+  const src = `import { createTheme } from '@myds/core';
+const opts = { mode: 'dark' };
+createTheme(opts);
+`;
+  const { functionCalls } = await extract(src, ['@myds/core']);
+  const arg = functionCalls[0].args[0];
+  assert.equal(arg.type, 'identifier');
+  assert.ok(arg.sourceSnippet !== null, 'sourceSnippet should be set for identifier arg');
+  assert.ok(
+    arg.sourceSnippet.includes('createTheme'),
+    'sourceSnippet should contain the call site',
+  );
+});
+
+test('static string function arg has sourceSnippet: null', async () => {
+  const src = `import { createTheme } from '@myds/core';
+createTheme('light');
+`;
+  const { functionCalls } = await extract(src, ['@myds/core']);
+  const arg = functionCalls[0].args[0];
+  assert.equal(arg.type, 'string');
+  assert.equal(arg.sourceSnippet, null);
+});
+
+test('sourceSnippet for dynamic prop includes up to 5 surrounding lines', async () => {
+  // Build a source with clear context lines above and below the dynamic prop
+  const src = `import { Card } from '@myds/card';
+// line 2
+// line 3
+const el = <Card title={someTitle} />;
+// line 5
+// line 6
+`;
+  const { componentUsages } = await extract(src, ['@myds/card'], true);
+  const titleProp = componentUsages[0].props.find(p => p.name === 'title');
+  assert.ok(titleProp, 'title prop should exist');
+  assert.ok(titleProp.sourceSnippet !== null, 'sourceSnippet should be set');
+  const lines = titleProp.sourceSnippet.split('\n');
+  // Should have at most 5 lines (2 before + target + 2 after)
+  assert.ok(lines.length <= 5, `expected ≤5 lines in snippet, got ${lines.length}`);
+  // The snippet must include the line with the prop usage
+  assert.ok(
+    titleProp.sourceSnippet.includes('someTitle'),
+    'snippet should include the dynamic value',
+  );
+});
