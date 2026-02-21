@@ -93,8 +93,8 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
 
   if (result.fileCount === 0) {
     console.warn(chalk.yellow('Warning: No source files found matching the configured patterns.'));
+    console.warn(chalk.dim(`  Include patterns: ${config.include.join(', ')}`));
     console.warn(chalk.dim('  Check your include/exclude patterns in usegraph.config.json.'));
-    console.warn(chalk.dim('  Default includes: **/*.ts, **/*.tsx, **/*.js, **/*.jsx'));
     console.warn('');
   }
 

@@ -59,8 +59,8 @@ export function writeDefaultConfig(projectPath: string): void {
   const configPath = join(projectPath, 'usegraph.config.json');
   const config: UsegraphConfig = {
     targetPackages: ['your-package-name'],
-    include: ['src/**/*.ts', 'src/**/*.tsx'],
-    exclude: DEFAULT_CONFIG.exclude,
+    include: [...DEFAULT_CONFIG.include],
+    exclude: [...DEFAULT_CONFIG.exclude],
     outputDir: '.usegraph',
   };
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');

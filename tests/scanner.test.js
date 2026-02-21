@@ -372,3 +372,69 @@ test('loadLatestScanResult returns null when no scan exists', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ─── Regression: src/-only include patterns miss files outside src/ ────────────
+
+const { writeDefaultConfig, loadConfig } = require('../dist/config');
+
+/**
+ * Reproduces the bug where `usegraph init` created configs with `src/**` patterns
+ * that failed to find any files in projects whose source lives in pages/, components/,
+ * or other top-level directories (e.g. Next.js projects).
+ */
+test('scanProject with src-only include patterns finds no files outside src/', async () => {
+  const root = join(tmpdir(), `usegraph-test-${randomUUID()}`);
+  mkdirSync(join(root, 'pages'), { recursive: true });
+  mkdirSync(join(root, 'components'), { recursive: true });
+  writeFileSync(join(root, 'pages', 'index.tsx'), APP_TSX, 'utf-8');
+  writeFileSync(join(root, 'components', 'Button.tsx'), OTHER_TS, 'utf-8');
+  try {
+    const result = await scanProject({
+      projectPath: root,
+      targetPackages: ['@myds/button'],
+      config: makeConfig({ include: ['src/**/*.ts', 'src/**/*.tsx'] }),
+    });
+    assert.equal(result.fileCount, 0,
+      'src/-only include patterns should find 0 files when project has no src/ dir');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('scanProject with broad include patterns finds files outside src/', async () => {
+  const root = join(tmpdir(), `usegraph-test-${randomUUID()}`);
+  mkdirSync(join(root, 'pages'), { recursive: true });
+  mkdirSync(join(root, 'components'), { recursive: true });
+  writeFileSync(join(root, 'pages', 'index.tsx'), APP_TSX, 'utf-8');
+  writeFileSync(join(root, 'components', 'Button.tsx'), OTHER_TS, 'utf-8');
+  try {
+    const result = await scanProject({
+      projectPath: root,
+      targetPackages: ['@myds/button'],
+      config: makeConfig(), // uses **/*.ts, **/*.tsx — broad patterns
+    });
+    assert.equal(result.fileCount, 2,
+      'broad include patterns should find files in pages/ and components/');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('writeDefaultConfig creates config with broad include patterns', () => {
+  const root = join(tmpdir(), `usegraph-test-${randomUUID()}`);
+  mkdirSync(root, { recursive: true });
+  try {
+    writeDefaultConfig(root);
+    const config = loadConfig(root);
+    assert.ok(
+      config.include.every((p) => !p.startsWith('src/')),
+      'init config should not restrict patterns to src/ — would miss Next.js pages/, components/, etc.',
+    );
+    assert.ok(
+      config.include.some((p) => p.startsWith('**/')),
+      'init config should use ** glob patterns to find files in any directory',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
