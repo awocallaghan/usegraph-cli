@@ -377,10 +377,20 @@ via the `query_tooling_distribution` MCP tool.
 
 ## Storage Layout
 
-Scan results are stored globally at:
+Scan results are stored globally at `~/.usegraph/` by default. Override the root with the
+`USEGRAPH_HOME` environment variable (useful for CI, testing, or isolating multiple
+usegraph instances):
+
+```bash
+USEGRAPH_HOME=/tmp/my-org-data usegraph scan ./apps/web --packages @acme/ui
+USEGRAPH_HOME=/tmp/my-org-data usegraph build
+USEGRAPH_HOME=/tmp/my-org-data usegraph mcp
+```
+
+Directory layout:
 
 ```
-~/.usegraph/
+$USEGRAPH_HOME/           # default: ~/.usegraph/
   <project-slug>/
     scans/
       <uuid>.json    # Full scan result (one file per scan)

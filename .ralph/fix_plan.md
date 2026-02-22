@@ -138,7 +138,7 @@ Dependencies:
 
 ### 7.0 — Make data dirs configurable for testing
 
-- [ ] **7.0** Thread a `USEGRAPH_HOME` env-var override through the codebase:
+- [x] **7.0** Thread a `USEGRAPH_HOME` env-var override through the codebase:
       — In `src/commands/build.ts`: replace `join(homedir(), '.usegraph')` with
         `process.env.USEGRAPH_HOME ?? join(homedir(), '.usegraph')`
       — In `src/commands/mcp.ts`: same override for `BUILT_DIR`

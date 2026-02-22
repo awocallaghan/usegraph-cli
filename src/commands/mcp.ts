@@ -36,7 +36,12 @@ import chalk from 'chalk';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const BUILT_DIR = join(homedir(), '.usegraph', 'built');
+/**
+ * Root of the global store.
+ * Override with the `USEGRAPH_HOME` environment variable (useful for testing).
+ */
+const STORE_ROOT = process.env.USEGRAPH_HOME ?? join(homedir(), '.usegraph');
+const BUILT_DIR = join(STORE_ROOT, 'built');
 
 const PARQUET = {
   project_snapshots: join(BUILT_DIR, 'project_snapshots.parquet'),

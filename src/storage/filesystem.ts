@@ -9,8 +9,11 @@ import {
 import type { ScanResult, UsegraphConfig } from '../types';
 import type { StorageBackend } from './backend';
 
-/** Root directory for the global cross-project store. */
-export const GLOBAL_STORE_ROOT = join(homedir(), '.usegraph');
+/**
+ * Root directory for the global cross-project store.
+ * Override with the `USEGRAPH_HOME` environment variable (useful for testing).
+ */
+export const GLOBAL_STORE_ROOT = process.env.USEGRAPH_HOME ?? join(homedir(), '.usegraph');
 
 /**
  * Filesystem-based storage backend.

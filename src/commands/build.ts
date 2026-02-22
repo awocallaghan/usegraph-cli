@@ -33,8 +33,11 @@ import type { ScanResult } from '../types';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-/** Root of the global cross-project store */
-export const STORE_ROOT = join(homedir(), '.usegraph');
+/**
+ * Root of the global cross-project store.
+ * Override with the `USEGRAPH_HOME` environment variable (useful for testing).
+ */
+export const STORE_ROOT = process.env.USEGRAPH_HOME ?? join(homedir(), '.usegraph');
 
 /** Output directory for materialised Parquet files */
 export const BUILT_DIR = join(STORE_ROOT, 'built');
