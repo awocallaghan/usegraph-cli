@@ -1,0 +1,38 @@
+{
+  "name": "@acme/utils",
+  "version": "0.5.0",
+  "description": "Acme shared utility functions and React hooks",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "peerDependencies": {
+    "react": ">=16.8.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "react": "^18.2.0",
+    "typescript": "^5.1.6",
+    "vite": "^4.4.7",
+    "vitest": "^0.34.1"
+  },
+  "scripts": {
+    "build": "vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  }
+}
