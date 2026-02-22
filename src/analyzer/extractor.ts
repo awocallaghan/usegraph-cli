@@ -140,6 +140,12 @@ export function extractFromAst(
         importedFrom: packageSource,
         props,
         selfClosing: !!(node['selfClosing'] as boolean),
+        packageVersionResolved: null,
+        packageVersionMajor: null,
+        packageVersionMinor: null,
+        packageVersionPatch: null,
+        packageVersionPrerelease: null,
+        packageVersionIsPrerelease: null,
       });
 
       return false; // don't descend into JSX attributes to avoid double-counting
@@ -166,6 +172,12 @@ export function extractFromAst(
         functionName: funcName,
         importedFrom: packageSource,
         args,
+        packageVersionResolved: null,
+        packageVersionMajor: null,
+        packageVersionMinor: null,
+        packageVersionPatch: null,
+        packageVersionPrerelease: null,
+        packageVersionIsPrerelease: null,
       });
     }
   });

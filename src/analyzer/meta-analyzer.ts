@@ -192,7 +192,17 @@ export function analyzeProjectMeta(projectPath: string): ProjectMeta {
         const block = parsedPkg[section];
         if (block && typeof block === 'object') {
           for (const [name, version] of Object.entries(block as Record<string, string>)) {
-            dependencies.push({ name, versionRange: version, section });
+            dependencies.push({
+              name,
+              versionRange: version,
+              section,
+              versionResolved: null,
+              versionMajor: null,
+              versionMinor: null,
+              versionPatch: null,
+              versionPrerelease: null,
+              versionIsPrerelease: null,
+            });
           }
         }
       }

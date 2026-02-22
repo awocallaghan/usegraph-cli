@@ -45,6 +45,13 @@ export interface ComponentUsage {
   props: PropInfo[];
   /** True when component is self-closing */
   selfClosing: boolean;
+  /** Resolved package version from lockfile (null if lockfile unavailable) */
+  packageVersionResolved: string | null;
+  packageVersionMajor: number | null;
+  packageVersionMinor: number | null;
+  packageVersionPatch: number | null;
+  packageVersionPrerelease: string | null;
+  packageVersionIsPrerelease: boolean | null;
 }
 
 /** A single argument to a function call */
@@ -70,6 +77,13 @@ export interface FunctionCallInfo {
   /** Package the function was imported from */
   importedFrom: string;
   args: ArgInfo[];
+  /** Resolved package version from lockfile (null if lockfile unavailable) */
+  packageVersionResolved: string | null;
+  packageVersionMajor: number | null;
+  packageVersionMinor: number | null;
+  packageVersionPatch: number | null;
+  packageVersionPrerelease: string | null;
+  packageVersionIsPrerelease: boolean | null;
 }
 
 /** All usage data extracted from a single source file */
@@ -148,6 +162,13 @@ export interface DependencyEntry {
   versionRange: string;
   /** Which section of package.json this came from */
   section: 'dependencies' | 'devDependencies' | 'peerDependencies' | 'optionalDependencies';
+  /** Exact installed version from lockfile (null if lockfile unavailable) */
+  versionResolved: string | null;
+  versionMajor: number | null;
+  versionMinor: number | null;
+  versionPatch: number | null;
+  versionPrerelease: string | null;
+  versionIsPrerelease: boolean | null;
 }
 
 /** Flat tooling detection result replacing the old ToolingInfo[] array */

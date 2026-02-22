@@ -12,6 +12,13 @@ import { basename, join } from 'path';
 import { spawnSync } from 'child_process';
 import { analyzeFile } from './file-analyzer';
 import { analyzeProjectMeta } from './meta-analyzer';
+import {
+  npmLockfileParser,
+  pnpmLockfileParser,
+  yarnV1LockfileParser,
+  yarnBerryLockfileParser,
+  type ResolvedDependency,
+} from './lockfile';
 import { loadFileCache, saveFileCache } from '../storage';
 import type { FileCacheEntry, FileCache } from '../storage';
 import type { FileAnalysis, ScanResult, ScanSummary, PackageSummary, UsegraphConfig } from '../types';
@@ -67,6 +74,46 @@ function readPackageJson(projectPath: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Detect the lockfile present in `projectPath` and parse it into a resolved
+ * version map.  Priority order mirrors meta-analyzer's packageManager detection:
+ * pnpm > bun (no lockfile parser yet) > yarn > npm.
+ *
+ * Returns an empty map when no supported lockfile is found or parsing fails.
+ */
+function detectAndParseLockfile(projectPath: string): Map<string, ResolvedDependency> {
+  const candidates: Array<{ file: string; parse: (content: string) => Map<string, ResolvedDependency> }> = [
+    {
+      file: 'pnpm-lock.yaml',
+      parse: (c) => pnpmLockfileParser.parse(c),
+    },
+    {
+      file: 'yarn.lock',
+      parse: (c) =>
+        c.includes('__metadata:')
+          ? yarnBerryLockfileParser.parse(c)
+          : yarnV1LockfileParser.parse(c),
+    },
+    {
+      file: 'package-lock.json',
+      parse: (c) => npmLockfileParser.parse(c),
+    },
+  ];
+
+  for (const { file, parse } of candidates) {
+    const lockPath = join(projectPath, file);
+    if (!existsSync(lockPath)) continue;
+    try {
+      const content = readFileSync(lockPath, 'utf-8');
+      return parse(content);
+    } catch {
+      return new Map();
+    }
+  }
+
+  return new Map();
 }
 
 export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
@@ -139,6 +186,10 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
   const summary = buildSummary(results, targetPackages);
   const meta = analyzeProjectMeta(projectPath);
 
+  // Resolve installed versions from the lockfile and enrich the scan result
+  const resolvedVersions = detectAndParseLockfile(projectPath);
+  enrichWithResolvedVersions(results, meta, resolvedVersions);
+
   return {
     id: randomUUID(),
     schemaVersion: 1,
@@ -157,6 +208,62 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
     meta,
     cacheHits: cache ? cacheHits : undefined,
   };
+}
+
+/**
+ * Enrich `DependencyEntry[]` in ProjectMeta and all `ComponentUsage` /
+ * `FunctionCallInfo` objects with resolved version data from the lockfile.
+ *
+ * Mutates the input arrays in-place (avoids re-allocation overhead).
+ */
+function enrichWithResolvedVersions(
+  fileResults: FileAnalysis[],
+  meta: ReturnType<typeof analyzeProjectMeta> | undefined,
+  resolved: Map<string, ResolvedDependency>,
+): void {
+  if (resolved.size === 0) return;
+
+  // Enrich DependencyEntry items
+  if (meta) {
+    for (const dep of meta.dependencies) {
+      const r = resolved.get(dep.name);
+      if (r) {
+        dep.versionResolved = r.versionResolved;
+        dep.versionMajor = r.versionMajor;
+        dep.versionMinor = r.versionMinor;
+        dep.versionPatch = r.versionPatch;
+        dep.versionPrerelease = r.versionPrerelease;
+        dep.versionIsPrerelease = r.versionIsPrerelease;
+      }
+    }
+  }
+
+  // Denormalise resolved version onto each component usage and function call
+  for (const file of fileResults) {
+    for (const usage of file.componentUsages) {
+      const r = resolved.get(usage.importedFrom);
+      if (r) {
+        usage.packageVersionResolved = r.versionResolved;
+        usage.packageVersionMajor = r.versionMajor;
+        usage.packageVersionMinor = r.versionMinor;
+        usage.packageVersionPatch = r.versionPatch;
+        usage.packageVersionPrerelease = r.versionPrerelease;
+        usage.packageVersionIsPrerelease = r.versionIsPrerelease;
+      }
+    }
+
+    for (const call of file.functionCalls) {
+      const r = resolved.get(call.importedFrom);
+      if (r) {
+        call.packageVersionResolved = r.versionResolved;
+        call.packageVersionMajor = r.versionMajor;
+        call.packageVersionMinor = r.versionMinor;
+        call.packageVersionPatch = r.versionPatch;
+        call.packageVersionPrerelease = r.versionPrerelease;
+        call.packageVersionIsPrerelease = r.versionIsPrerelease;
+      }
+    }
+  }
 }
 
 function buildSummary(files: FileAnalysis[], targetPackages: string[]): ScanSummary {
