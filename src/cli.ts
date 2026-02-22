@@ -7,6 +7,7 @@ import { runReport } from './commands/report';
 import { runDashboard } from './commands/dashboard';
 import { runServe } from './commands/serve';
 import { runBuild } from './commands/build';
+import { runMcp } from './commands/mcp';
 import { loadConfig, writeDefaultConfig } from './config';
 import { computeProjectSlug } from './analyzer/project-identity';
 import { createStorageBackend } from './storage/index';
@@ -119,6 +120,25 @@ export function createCli(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(chalk.red(`Error during build: ${message}`));
+        process.exit(1);
+      }
+    });
+
+  // ── mcp ───────────────────────────────────────────────────────────────────
+  program
+    .command('mcp')
+    .description(
+      'Start a Model Context Protocol (MCP) server over stdio.\n' +
+        'Exposes 13 tools for querying Parquet tables built by `usegraph build`.\n' +
+        'Add to your MCP client config: usegraph mcp',
+    )
+    .option('--verbose', 'Log method names to stderr')
+    .action(async (opts: { verbose?: boolean }) => {
+      try {
+        await runMcp(opts);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(chalk.red(`MCP server error: ${message}`));
         process.exit(1);
       }
     });
