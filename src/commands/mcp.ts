@@ -759,7 +759,7 @@ async function toolGetSourceContext(args: {
 
 // ─── Tool dispatch ────────────────────────────────────────────────────────────
 
-async function callTool(
+export async function callTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {

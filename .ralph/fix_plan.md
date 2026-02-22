@@ -7,23 +7,6 @@
 
 ---
 
-## MCP Refactor: migrate to `tmcp` framework
-
-**BLOCKED — ESM/CJS incompatibility.**
-`tmcp`, `@tmcp/adapter-zod`, and `@tmcp/transport-stdio` are all ESM-only packages
-(`"type": "module"`). Our project compiles to CommonJS. TypeScript converts `import()`
-to `Promise.resolve().then(() => require(...))`, which throws ERR_REQUIRE_ESM at runtime.
-The `Function('m','return import(m)')` workaround loses all type safety and adds complexity.
-The current manual readline/JSON-RPC implementation is correct and already tested.
-Dependencies were installed (`tmcp`, `@tmcp/adapter-zod`, `zod`, `@tmcp/transport-stdio`)
-but the migration is deferred until the project migrates to ESM.
-
-- [x] **6.1** ~~Install tmcp dependencies~~ — installed, migration blocked (see above)
-- [ ] **6.2** ~~Rewrite mcp.ts~~ — SKIP (ESM/CJS blocker; current implementation is correct)
-- [ ] **6.3** ~~Verify integration~~ — SKIP (depends on 6.2)
-
----
-
 ## Phase 7 — End-to-end test suite
 
 Dependencies:
@@ -62,22 +45,22 @@ Each fixture needs:
       Lockfile: `pnpm-lock.yaml` stub resolving `@acme/ui@1.2.0`, `react@18.2.0`,
         `@acme/utils@0.5.0`
 
-- [ ] **7.1b** `tests/fixtures/org/apps/dashboard/`
+- [x] **7.1b** `tests/fixtures/org/apps/dashboard/`
       Stack: React 18 · Webpack 5 · Jest · ESLint · TypeScript · npm
       Source: ≥3 TSX files; uses Button, Modal, Badge; calls formatCurrency, debounce
       Lockfile: `package-lock.json` stub (lockfileVersion 3)
 
-- [ ] **7.1c** `tests/fixtures/org/apps/docs/`
+- [x] **7.1c** `tests/fixtures/org/apps/docs/`
       Stack: Next.js 14 · TypeScript · ESLint · Prettier · yarn Berry (v2)
       Source: ≥2 TSX files (pages/components); uses Input, Tooltip from `@acme/ui`
       Lockfile: `yarn.lock` Berry YAML stub (starts with `__metadata:`)
 
-- [ ] **7.1d** `tests/fixtures/org/apps/mobile/`
+- [x] **7.1d** `tests/fixtures/org/apps/mobile/`
       Stack: React Native · Babel (no TypeScript) · Jest · npm · yarn v1
       Source: ≥2 JSX files; calls formatDate, formatCurrency, useLocalStorage from `@acme/utils`
       Lockfile: `yarn.lock` v1 stub (classic text format)
 
-- [ ] **7.1e** `tests/fixtures/org/packages/ui/`
+- [x] **7.1e** `tests/fixtures/org/packages/ui/`
       The source package for `@acme/ui` itself
       `package.json` name: `@acme/ui`, version `1.2.0`; deps include `@acme/utils`
       Tooling: Storybook config (`storybook/main.ts`), Vitest, TypeScript
@@ -85,7 +68,7 @@ Each fixture needs:
         Badge.tsx, Tooltip.tsx) — each is a minimal React component definition
       Lockfile: `pnpm-lock.yaml` stub
 
-- [ ] **7.1f** `tests/fixtures/org/packages/utils/`
+- [x] **7.1f** `tests/fixtures/org/packages/utils/`
       The source package for `@acme/utils`
       `package.json` name: `@acme/utils`, version `0.5.0`
       Tooling: Vitest, TypeScript
@@ -94,7 +77,7 @@ Each fixture needs:
 
 ### 7.2 — E2E test harness
 
-- [ ] **7.2** Write `tests/e2e.test.js` (Node built-in test runner, no extra deps):
+- [x] **7.2** Write `tests/e2e.test.js` (Node built-in test runner, no extra deps):
 
       Setup (runs once, `before` hook):
         1. Create a temp dir `USEGRAPH_HOME` (use `os.mkdtempSync`)
@@ -134,6 +117,14 @@ Each fixture needs:
       — Re-run both the unit test and the full E2E suite; confirm green
       — Append a one-line entry here: `[7.3.N] <bug summary> — fixed in <file>:<line>`
       This task is complete when `node --test tests/*.test.js tests/e2e.test.js` exits 0.
+
+      Known failures from 7.2 run (6/8 pass):
+        [7.3.1] list_projects — SQL Binder Error: scanned_at (VARCHAR) compared with TIMESTAMP
+                in toolListProjects(); fix: cast `scanned_at::TIMESTAMP` in the is_stale expr
+                — src/commands/mcp.ts (toolListProjects)
+        [7.3.2] get_scan_metadata — same VARCHAR/TIMESTAMP cast error in toolGetScanMetadata()
+                CASE WHEN scanned_at < current_timestamp needs scanned_at::TIMESTAMP cast
+                — src/commands/mcp.ts (toolGetScanMetadata)
 
 ---
 
