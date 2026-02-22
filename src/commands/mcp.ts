@@ -377,7 +377,7 @@ async function toolGetScanMetadata(): Promise<unknown> {
       MAX(scanned_at)::VARCHAR                     AS newest_scan,
       array_agg(DISTINCT schema_version)           AS schema_versions,
       COUNT(DISTINCT CASE
-        WHEN scanned_at < current_timestamp - INTERVAL 7 DAY
+        WHEN scanned_at::TIMESTAMP < current_timestamp - INTERVAL 7 DAY
         THEN project_id END)::INTEGER              AS stale_project_count
     FROM read_parquet('${sqlStr(snapshotsPath)}')
   `);
@@ -407,7 +407,7 @@ async function toolListProjects(args: {
       test_framework,
       typescript,
       package_manager,
-      (scanned_at < current_timestamp - INTERVAL ${staleDays} DAY) AS is_stale
+      (scanned_at::TIMESTAMP < current_timestamp - INTERVAL ${staleDays} DAY) AS is_stale
     FROM read_parquet('${sqlStr(p)}')
     WHERE is_latest = true
       ${frameworkFilter}
