@@ -479,9 +479,83 @@ function extractYarnPackageName(specifier: string): string | null {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// yarn — yarn.lock Berry (v2+)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Parser for yarn Berry (v2+) `yarn.lock` format.
+ *
+ * Berry lockfiles use a YAML-like format identified by an `__metadata:` block:
+ *  - Entry headers at column 0: `"<name>@npm:<range>, <name>@npm:<range>":` etc.
+ *  - Version field (2-space indent): `  version: <resolved>` (YAML style, no quotes)
+ *  - Protocol prefixes (`@npm:`, `@patch:`, `@workspace:`) are stripped from names
+ *  - Entries separated by blank lines
+ *
+ * The `__metadata:` entry is silently ignored (no `@` → name extraction returns null).
+ *
+ * Returns an empty map for v1 content — v1 uses `version "x.y.z"` (quoted) which
+ * does not match this parser's `version: x.y.z` pattern.
+ */
+export class YarnBerryLockfileParser implements LockfileParser {
+  parse(lockfileContent: string): Map<string, ResolvedDependency> {
+    const result = new Map<string, ResolvedDependency>();
+    if (!lockfileContent.trim()) return result;
+
+    const lines = lockfileContent.split('\n');
+    let currentNames: string[] = [];
+    let currentVersion: string | null = null;
+
+    const flush = (): void => {
+      if (currentNames.length > 0 && currentVersion) {
+        for (const name of currentNames) {
+          if (!result.has(name)) {
+            result.set(name, makeResolved(name, currentVersion!));
+          }
+        }
+      }
+      currentNames = [];
+      currentVersion = null;
+    };
+
+    for (const line of lines) {
+      if (line.startsWith('#')) continue;
+
+      const trimmed = line.trim();
+      if (!trimmed) {
+        flush();
+        continue;
+      }
+
+      // Entry header: at column 0, ends with ':'
+      if (!line.startsWith(' ') && !line.startsWith('\t') && trimmed.endsWith(':')) {
+        flush();
+        const header = trimmed.slice(0, -1);
+        for (const spec of splitYarnSpecifiers(header)) {
+          const name = extractYarnPackageName(spec);
+          if (name && !currentNames.includes(name)) {
+            currentNames.push(name);
+          }
+        }
+        continue;
+      }
+
+      // Version field: `  version: 1.2.3` (YAML style — no quotes, unlike v1)
+      if (trimmed.startsWith('version:') && currentNames.length > 0 && !currentVersion) {
+        const match = trimmed.match(/^version:\s+(.+)/);
+        if (match) currentVersion = match[1].trim();
+      }
+    }
+
+    flush();
+    return result;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Singleton instances
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const npmLockfileParser = new NpmLockfileParser();
 export const pnpmLockfileParser = new PnpmLockfileParser();
 export const yarnV1LockfileParser = new YarnV1LockfileParser();
+export const yarnBerryLockfileParser = new YarnBerryLockfileParser();
