@@ -4,127 +4,23 @@
 - Build: clean (tsc → no TS errors); use `node node_modules/typescript/bin/tsc`
   (pnpm build broken in this environment due to workspace exec)
 - Tests: 134 passing
-- Phase 1 (schema evolution) complete
-- Phase 2 (lockfile parsing) complete — 4 parsers + scanner integration
-- Phase 3 (build command) complete — src/commands/build.ts + `usegraph build` in cli.ts
-  — Writes 6 Parquet tables to ~/.usegraph/built/ via DuckDB read_json_auto + COPY
-  — duckdb@1.4.4 installed; binary downloaded to lib/binding/duckdb.node
-  — CAUTION: duckdb build scripts blocked by pnpm; binary must be downloaded manually
-    (run: node node_modules/.pnpm/@mapbox+node-pre-gyp@2.0.3_encoding@0.1.13/node_modules/@mapbox/node-pre-gyp/bin/node-pre-gyp install --directory <duckdb-pkg-dir>)
-
-See SPEC.md for the full data architecture being implemented.
 
 ---
 
-## Phase 1 — Schema Evolution (enrich raw scan output)
+## MCP Refactor: migrate to `tmcp` framework
 
-Each task here modifies `src/types.ts`, `src/analyzer/`, and related tests.
-Tasks must be done IN ORDER — later tasks depend on earlier ones.
+**BLOCKED — ESM/CJS incompatibility.**
+`tmcp`, `@tmcp/adapter-zod`, and `@tmcp/transport-stdio` are all ESM-only packages
+(`"type": "module"`). Our project compiles to CommonJS. TypeScript converts `import()`
+to `Promise.resolve().then(() => require(...))`, which throws ERR_REQUIRE_ESM at runtime.
+The `Function('m','return import(m)')` workaround loses all type safety and adds complexity.
+The current manual readline/JSON-RPC implementation is correct and already tested.
+Dependencies were installed (`tmcp`, `@tmcp/adapter-zod`, `zod`, `@tmcp/transport-stdio`)
+but the migration is deferred until the project migrates to ESM.
 
-- [x] **1.1** Add `schemaVersion`, `repoUrl`, `branch`, `commitSha` to `ScanResult`
-      — see SPEC.md §Schema: Top-level fields
-- [x] **1.2** Add verbatim `packageJson` block to `ScanResult`
-      — store the full parsed `package.json` object (or `null`)
-- [x] **1.3** Replace `ProjectMeta.tooling: ToolingInfo[]` with flat `ToolingMeta` struct
-      — update `meta-analyzer.ts` to return flat fields; see SPEC.md §Schema: tooling block
-- [x] **1.4** Add `sourceSnippet: string | null` to `PropInfo` and `ArgInfo`
-      — update `extractor.ts` to capture ~5 lines of source context for dynamic values;
-        see SPEC.md §Schema: sourceSnippet
-      — ALSO fixed: SWC BytePos is cumulative across parse() calls; subtract module
-        span.start from all offsets to get source-relative positions
-
----
-
-## Phase 2 — Lockfile Parsing (resolve actual installed versions)
-
-Creates `src/analyzer/lockfile.ts`. Each task is independent once the interface is
-defined (2.1). Tasks 2.2–2.4 can be done in any order. Task 2.5 requires 2.1–2.4.
-
-- [x] **2.1** Design lockfile interface + implement `package-lock.json` (npm) parser
-      — see SPEC.md §Lockfile Parsing
-- [x] **2.2** Implement `pnpm-lock.yaml` parser
-- [x] **2.3** Implement `yarn.lock` v1 parser (custom text format)
-- [x] **2.4** Implement `yarn.lock` Berry (v2+) parser (YAML format)
-- [x] **2.5** Integrate lockfile resolver into scanner:
-      — add `versionResolved`, `versionMajor`, `versionMinor`, `versionPatch`,
-        `versionPrerelease`, `versionIsPrerelease` to `DependencyEntry`
-      — denormalise resolved version onto each `ComponentUsage` and `FunctionCallInfo`
-
----
-
-## Phase 3 — `usegraph build` command + Parquet materialisation
-
-Reads from `~/.usegraph/*/scans/*.json`, writes to `~/.usegraph/built/*.parquet`.
-Requires DuckDB. See SPEC.md §Parquet Tables for all column definitions.
-
-- [x] **3.1** Add `duckdb` npm dependency; create `src/commands/build.ts` skeleton;
-      design file layout (`~/.usegraph/built/`)
-- [x] **3.2** Materialise `project_snapshots` + `dependencies` tables
-- [x] **3.3** Materialise `component_usages` + `component_prop_usages` tables
-- [x] **3.4** Materialise `function_usages` + `function_arg_usages` tables
-- [x] **3.5** Register `usegraph build [--rebuild]` in `src/cli.ts`; add basic E2E test
-
----
-
-## Phase 4 — `usegraph mcp` MCP server
-
-Exposes 13 tools over the Parquet tables. Requires `@modelcontextprotocol/sdk`.
-See SPEC.md §MCP Tools for each tool's input schema and SQL.
-
-- [x] **4.1** Add `@modelcontextprotocol/sdk`; create `src/commands/mcp.ts` scaffold
-      with tool registration pattern
-      — Implemented protocol DIRECTLY (no SDK needed): newline-delimited JSON-RPC 2.0 over stdio
-      — Avoids `pnpm install` requirement; simpler and self-contained
-- [x] **4.2** Implement discovery tools:
-      `get_scan_metadata`, `list_projects`, `list_packages`, `get_project_snapshot`
-- [x] **4.3** Implement dependency tools:
-      `query_dependency_versions`, `query_prerelease_usage`, `query_tooling_distribution`
-- [x] **4.4** Implement component tools:
-      `query_component_usage`, `query_prop_usage`, `query_component_adoption_trend`
-- [x] **4.5** Implement function + source tools:
-      `query_export_usage`, `query_export_adoption_trend`, `get_source_context`
-- [x] **4.6** Register `usegraph mcp [--verbose]` in `src/cli.ts`; integration test
-      — WARNING: column-injection guard for `query_tooling_distribution` validated against TOOLING_CATEGORY_ALLOWLIST
-
----
-
-## Phase 5 — README Update
-
-- [x] **5.1** Rewrite `README.md` to reflect the current state of the tool:
-      — Add `usegraph build [--rebuild]` command (options, examples, Parquet output layout)
-      — Add `usegraph mcp [--verbose]` command (setup instructions, full list of 13 tools with
-        one-line descriptions, how to wire into an MCP client / Claude Desktop)
-      — Update the Architecture section: add `commands/build.ts`, `commands/mcp.ts`,
-        `analyzer/lockfile.ts`, `analyzer/meta-analyzer.ts` to the tree
-      — Update Data Collected section to mention lockfile version resolution and tooling metadata
-      — Remove stale "(STRETCH)" labels
-      — Add a "Data Flow" section: scan → .usegraph/ JSON → `usegraph build` → Parquet → MCP tools
-
----
-
-## Phase 6 — MCP Refactor: migrate to `tmcp` framework
-
-Tasks must be done IN ORDER.
-
-- [ ] **6.1** Install tmcp dependencies and design the migration:
-      `pnpm add tmcp @tmcp/adapter-zod zod @tmcp/transport-stdio`
-      — Read the tmcp README + source to understand `createServer()`, `server.tool()`, and
-        how `@tmcp/transport-stdio` replaces the readline loop
-      — Write a brief migration map in a comment block at the top of the new `mcp.ts`
-        (old pattern → new pattern for each of the 13 tools)
-
-- [ ] **6.2** Rewrite `src/commands/mcp.ts` using tmcp:
-      — Replace the raw readline + JSON-RPC dispatch loop with `createServer()` from `tmcp`
-      — Define each tool's input schema with Zod; keep the existing SQL queries unchanged
-      — Use `@tmcp/transport-stdio` for the stdio transport; keep `--verbose` flag wiring
-      — Preserve the `TOOLING_CATEGORY_ALLOWLIST` column-injection guard
-      — Remove now-unused readline / manual JSON-RPC helpers
-
-- [ ] **6.3** Verify integration after refactor:
-      — Build (`node node_modules/typescript/bin/tsc`); confirm zero TS errors
-      — Run existing tests (`node --test tests/*.test.js`); confirm all pass
-      — Manually exercise `echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node dist/index.js mcp`
-        and confirm the tool list is returned
+- [x] **6.1** ~~Install tmcp dependencies~~ — installed, migration blocked (see above)
+- [ ] **6.2** ~~Rewrite mcp.ts~~ — SKIP (ESM/CJS blocker; current implementation is correct)
+- [ ] **6.3** ~~Verify integration~~ — SKIP (depends on 6.2)
 
 ---
 
@@ -160,7 +56,7 @@ Each fixture needs:
      (must follow the parser format — see `src/analyzer/lockfile.ts` for field expectations)
   4. At least one tooling config file (e.g. `vitest.config.ts`, `jest.config.js`, `.eslintrc`)
 
-- [ ] **7.1a** `tests/fixtures/org/apps/web-app/`
+- [x] **7.1a** `tests/fixtures/org/apps/web-app/`
       Stack: React 18 · Vite · Vitest · ESLint · TypeScript · pnpm
       Source: ≥3 TSX files; Button used with ≥3 distinct prop combinations; formatDate called
       Lockfile: `pnpm-lock.yaml` stub resolving `@acme/ui@1.2.0`, `react@18.2.0`,
@@ -241,18 +137,6 @@ Each fixture needs:
 
 ---
 
-## Backlog (lower priority)
-
-- [ ] Shell completion scripts (bash/zsh)
-- [ ] Incremental Parquet builds (track processed files; start with full --rebuild only)
-- [ ] Data retention policy in build step (daily for 30d, monthly beyond)
-
----
-
 ## Architecture Notes
 
 - See `.ralph/SPEC.md` for full schema, Parquet table definitions, and MCP tool API
-- `storage.ts` low-level helpers are **unchanged** — still used by `FilesystemBackend`
-- `schemaVersion: 1` = current extended schema (all Phase 1 fields present)
-- Old scan files on disk (no `schemaVersion`) are treated as schema v0 by the build step
-- `projectSlug` (from `computeProjectSlug()`) is used as `project_id` in Parquet tables
