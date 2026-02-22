@@ -6,6 +6,7 @@ import { runScan } from './commands/scan';
 import { runReport } from './commands/report';
 import { runDashboard } from './commands/dashboard';
 import { runServe } from './commands/serve';
+import { runBuild } from './commands/build';
 import { loadConfig, writeDefaultConfig } from './config';
 import { computeProjectSlug } from './analyzer/project-identity';
 import { createStorageBackend } from './storage/index';
@@ -100,6 +101,24 @@ export function createCli(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(chalk.red(`Unexpected error: ${message}`));
+        process.exit(1);
+      }
+    });
+
+  // ── build ─────────────────────────────────────────────────────────────────
+  program
+    .command('build')
+    .description(
+      'Materialise all scans from ~/.usegraph/ into Parquet tables in ~/.usegraph/built/',
+    )
+    .option('--rebuild', 'Force a full rebuild even if Parquet files already exist')
+    .option('--verbose', 'Print per-table progress')
+    .action(async (opts: { rebuild?: boolean; verbose?: boolean }) => {
+      try {
+        await runBuild(opts);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(chalk.red(`Error during build: ${message}`));
         process.exit(1);
       }
     });
