@@ -399,3 +399,52 @@ const el = <Card title={someTitle} />;
     'snippet should include the dynamic value',
   );
 });
+
+// ─── Default import method calls ─────────────────────────────────────────────
+
+test('tracks method call on a default import (e.g. theme.spacing())', async () => {
+  const src = `import theme from '@myds/tokens';
+theme.spacing(2);
+`;
+  const { functionCalls } = await extract(src, ['@myds/tokens']);
+  assert.equal(functionCalls.length, 1);
+  assert.equal(functionCalls[0].functionName, 'theme.spacing');
+  assert.equal(functionCalls[0].importedFrom, '@myds/tokens');
+  assert.equal(functionCalls[0].args[0].type, 'number');
+  assert.equal(functionCalls[0].args[0].value, 2);
+});
+
+test('tracks method call on a named import used as an object', async () => {
+  const src = `import { colors } from '@myds/tokens';
+colors.primary();
+`;
+  const { functionCalls } = await extract(src, ['@myds/tokens']);
+  assert.equal(functionCalls.length, 1);
+  assert.equal(functionCalls[0].functionName, 'colors.primary');
+  assert.equal(functionCalls[0].importedFrom, '@myds/tokens');
+});
+
+// ─── NewExpression tracking ───────────────────────────────────────────────────
+
+test('tracks new expression for a named constructor import', async () => {
+  const src = `import { Command } from 'commander';
+const program = new Command();
+`;
+  const { functionCalls } = await extract(src, ['commander']);
+  assert.equal(functionCalls.length, 1);
+  assert.equal(functionCalls[0].functionName, 'new Command');
+  assert.equal(functionCalls[0].importedFrom, 'commander');
+  assert.equal(functionCalls[0].args.length, 0);
+});
+
+test('tracks new expression with arguments', async () => {
+  const src = `import { MyClass } from 'my-lib';
+const x = new MyClass('arg1', 42);
+`;
+  const { functionCalls } = await extract(src, ['my-lib']);
+  assert.equal(functionCalls.length, 1);
+  assert.equal(functionCalls[0].functionName, 'new MyClass');
+  assert.equal(functionCalls[0].args.length, 2);
+  assert.equal(functionCalls[0].args[0].value, 'arg1');
+  assert.equal(functionCalls[0].args[1].value, 42);
+});

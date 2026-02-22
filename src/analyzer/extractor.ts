@@ -180,6 +180,37 @@ export function extractFromAst(
         packageVersionIsPrerelease: null,
       });
     }
+
+    // --- New expressions: new Foo() / new pkg.Foo() ------------------
+    if (node.type === 'NewExpression') {
+      const callee = node['callee'] as AstNode | undefined;
+      if (!callee) return;
+
+      const { funcName, packageSource } = resolveCallee(callee, importMap, namespaceMap);
+      if (!funcName || !packageSource) return;
+
+      const span = node['span'] as { start: number } | undefined;
+      const { line, column } = span ? getPos(span.start) : { line: 0, column: 0 };
+
+      // NewExpression arguments are direct expression nodes (not ExprOrSpread)
+      const argNodes = (node['arguments'] as AstNode[]) ?? [];
+      const args: ArgInfo[] = argNodes.map((a, i) => extractArg(a, i, getPos, getSnippet));
+
+      functionCalls.push({
+        file: filePath,
+        line,
+        column,
+        functionName: `new ${funcName}`,
+        importedFrom: packageSource,
+        args,
+        packageVersionResolved: null,
+        packageVersionMajor: null,
+        packageVersionMinor: null,
+        packageVersionPatch: null,
+        packageVersionPrerelease: null,
+        packageVersionIsPrerelease: null,
+      });
+    }
   });
 
   return { imports, componentUsages, functionCalls };
@@ -256,7 +287,7 @@ function resolveCallee(
     return { funcName: null, packageSource: null };
   }
 
-  // Member call: DS.someFunc() or obj.method()
+  // Member call: DS.someFunc() (namespace import) or obj.method() (default/named import)
   if (callee.type === 'MemberExpression') {
     const obj = callee['object'] as AstNode;
     const prop = callee['property'] as AstNode;
@@ -269,8 +300,12 @@ function resolveCallee(
           : undefined;
 
     if (objName && propName) {
+      // Namespace import: import * as DS from 'pkg' → DS.fn()
       const ns = namespaceMap.get(objName);
       if (ns) return { funcName: `${objName}.${propName}`, packageSource: ns };
+      // Default or named import: import theme from 'pkg' → theme.fn()
+      const importEntry = importMap.get(objName);
+      if (importEntry) return { funcName: `${objName}.${propName}`, packageSource: importEntry.source };
     }
     return { funcName: null, packageSource: null };
   }

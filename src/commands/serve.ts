@@ -234,18 +234,40 @@ tr:last-child td { border-bottom: none; }
 .bar-fill.fn { background: var(--purple); }
 .more-row td { color: var(--text-dim); font-size: 12px; }
 
-/* Prop tag pills */
-.prop-tag {
+/* Prop distribution display */
+.prop-dist { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-bottom: 3px; font-size: 11px; }
+.prop-dist:last-child { margin-bottom: 0; }
+.prop-name-tag {
   display: inline-block;
   background: rgba(167,139,250,0.15);
   color: var(--purple);
   border-radius: 3px;
   padding: 1px 6px;
-  font-size: 11px;
   font-family: 'Courier New', monospace;
-  margin-right: 4px;
-  margin-bottom: 2px;
+  white-space: nowrap;
 }
+.prop-val-tag {
+  display: inline-block;
+  background: rgba(56,189,248,0.08);
+  color: var(--accent);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.prop-val-tag .val-count { color: var(--text-dim); font-style: normal; margin-left: 2px; }
+.prop-dyn-tag {
+  display: inline-block;
+  background: rgba(251,191,36,0.08);
+  color: var(--yellow);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.prop-more { color: var(--text-dim); font-size: 10px; }
+.prop-more-props { color: var(--text-dim); font-size: 10px; margin-top: 2px; }
 
 /* Tooling / dep section */
 .tooling-section {
@@ -336,6 +358,61 @@ const DASHBOARD_JS = `
   }
 
   /* ──────────────────────────────────────────────────────
+     Helper: prop value distribution cell
+     propValueCounts: compName → propName → valueKey → count
+  ────────────────────────────────────────────────────── */
+  function renderPropDist(compName, propValueCounts) {
+    var compProps = propValueCounts[compName];
+    if (!compProps) return '<span style="color:var(--text-dim);font-size:11px">none</span>';
+
+    /* sort props by total usage count descending */
+    var propNames = Object.keys(compProps);
+    propNames.sort(function (a, b) {
+      var sumA = 0, sumB = 0;
+      for (var v in compProps[a]) sumA += compProps[a][v];
+      for (var v in compProps[b]) sumB += compProps[b][v];
+      return sumB - sumA;
+    });
+
+    var topProps = propNames.slice(0, 4);
+    var out = '';
+    for (var i = 0; i < topProps.length; i++) {
+      var pn = topProps[i];
+      var vals = compProps[pn];
+      /* sort values by count desc; separate dynamic from static */
+      var vkeys = Object.keys(vals);
+      vkeys.sort(function (a, b) { return vals[b] - vals[a]; });
+      var dynCount = vals['[dynamic]'] || 0;
+      var staticVkeys = [];
+      for (var vi = 0; vi < vkeys.length; vi++) {
+        if (vkeys[vi] !== '[dynamic]') staticVkeys.push(vkeys[vi]);
+      }
+
+      out += '<div class="prop-dist">';
+      out += '<span class="prop-name-tag">' + esc(pn) + '</span>';
+
+      /* top 2 static values */
+      var shown = Math.min(staticVkeys.length, 2);
+      for (var si = 0; si < shown; si++) {
+        var sv = staticVkeys[si];
+        out += '<span class="prop-val-tag">' + esc(sv.length > 16 ? sv.slice(0,14)+'..' : sv) +
+               '<em class="val-count">×' + vals[sv] + '</em></span>';
+      }
+      if (staticVkeys.length > 2) {
+        out += '<span class="prop-more">+' + (staticVkeys.length - 2) + '</span>';
+      }
+      if (dynCount > 0) {
+        out += '<span class="prop-dyn-tag">[dyn]×' + dynCount + '</span>';
+      }
+      out += '</div>';
+    }
+    if (propNames.length > 4) {
+      out += '<div class="prop-more-props">+' + (propNames.length - 4) + ' more props</div>';
+    }
+    return out;
+  }
+
+  /* ──────────────────────────────────────────────────────
      Helper: stat summary card
   ────────────────────────────────────────────────────── */
   function statCard(value, label) {
@@ -389,9 +466,10 @@ const DASHBOARD_JS = `
      Helper: per-package usage block
   ────────────────────────────────────────────────────── */
   function renderPkg(result, pkg, pkgSum) {
-    /* Build usage counts from raw file data */
+    /* Build usage counts from raw file data; also collect resolved version */
     var compCounts = {};
     var fnCounts   = {};
+    var pkgVersion = null; /* first resolved version seen for this package */
 
     for (var fi = 0; fi < result.files.length; fi++) {
       var f = result.files[fi];
@@ -399,31 +477,41 @@ const DASHBOARD_JS = `
         var u = f.componentUsages[ci];
         if (u.importedFrom === pkg) {
           compCounts[u.componentName] = (compCounts[u.componentName] || 0) + 1;
+          if (!pkgVersion && u.packageVersionResolved) pkgVersion = u.packageVersionResolved;
         }
       }
       for (var fci = 0; fci < f.functionCalls.length; fci++) {
         var c = f.functionCalls[fci];
         if (c.importedFrom === pkg) {
           fnCounts[c.functionName] = (fnCounts[c.functionName] || 0) + 1;
+          if (!pkgVersion && c.packageVersionResolved) pkgVersion = c.packageVersionResolved;
         }
       }
     }
 
     var out = '<div class="pkg-block">';
-    out += '<div class="pkg-label">' + esc(pkg) + '</div>';
+    var versionSuffix = pkgVersion ? '<span style="color:var(--text-dim);font-weight:400;font-size:10px;margin-left:6px;text-transform:none;letter-spacing:0">' + esc(pkgVersion) + '</span>' : '';
+    out += '<div class="pkg-label">' + esc(pkg) + versionSuffix + '</div>';
     out += '<div class="tables-grid">';
 
-    /* Collect prop frequencies per component */
-    var propCounts = {};
+    /* Collect prop VALUE distributions per component:
+       propValueCounts[compName][propName][valueKey] = count
+       where valueKey is the stringified static value or '[dynamic]' */
+    var propValueCounts = {};
     for (var fi2 = 0; fi2 < result.files.length; fi2++) {
       var f2 = result.files[fi2];
       for (var ci3 = 0; ci3 < f2.componentUsages.length; ci3++) {
         var u2 = f2.componentUsages[ci3];
         if (u2.importedFrom !== pkg) continue;
-        if (!propCounts[u2.componentName]) propCounts[u2.componentName] = {};
+        if (!propValueCounts[u2.componentName]) propValueCounts[u2.componentName] = {};
         for (var pi = 0; pi < u2.props.length; pi++) {
           var pname = u2.props[pi].name;
-          propCounts[u2.componentName][pname] = (propCounts[u2.componentName][pname] || 0) + 1;
+          if (!propValueCounts[u2.componentName][pname]) propValueCounts[u2.componentName][pname] = {};
+          var vraw = u2.props[pi].value;
+          var vkey = u2.props[pi].isDynamic
+            ? '[dynamic]'
+            : (vraw === null ? 'null' : vraw === true ? 'true' : vraw === false ? 'false' : String(vraw));
+          propValueCounts[u2.componentName][pname][vkey] = (propValueCounts[u2.componentName][pname][vkey] || 0) + 1;
         }
       }
     }
@@ -436,27 +524,19 @@ const DASHBOARD_JS = `
       var maxC = compCounts[compKeys[0]];
       out += '<div>';
       out += '<div class="section-title">Components</div>';
-      out += '<table><thead><tr><th>Name</th><th>Uses</th><th class="bar-cell"></th><th>Top props</th></tr></thead><tbody>';
+      out += '<table><thead><tr><th>Name</th><th>Uses</th><th class="bar-cell"></th><th>Props</th></tr></thead><tbody>';
       var climit = Math.min(compKeys.length, 15);
       for (var ci2 = 0; ci2 < climit; ci2++) {
         var cn   = compKeys[ci2];
         var cv   = compCounts[cn];
         var cpct = maxC > 0 ? Math.round((cv / maxC) * 100) : 0;
-        /* top 5 props for this component */
-        var topProps = '';
-        if (propCounts[cn]) {
-          var pkeys = Object.keys(propCounts[cn]).sort(function (a, b) {
-            return propCounts[cn][b] - propCounts[cn][a];
-          }).slice(0, 5);
-          for (var pki = 0; pki < pkeys.length; pki++) {
-            topProps += '<span class="prop-tag">' + esc(pkeys[pki]) + '</span>';
-          }
-        }
+        /* prop value distribution for this component */
+        var propDistHtml = renderPropDist(cn, propValueCounts);
         out += '<tr>';
         out += '<td class="name-cell">' + esc(cn) + '</td>';
         out += '<td>' + cv + '</td>';
         out += '<td class="bar-cell"><div class="bar-wrap"><div class="bar-fill" style="width:' + cpct + '%"></div></div></td>';
-        out += '<td>' + (topProps || '<span style="color:var(--text-dim);font-size:11px">none</span>') + '</td>';
+        out += '<td>' + propDistHtml + '</td>';
         out += '</tr>';
       }
       if (compKeys.length > 15) {

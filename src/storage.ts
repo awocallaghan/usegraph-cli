@@ -62,7 +62,8 @@ export function listScans(outputDir: string): string[] {
 // File-level incremental scan cache
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CACHE_VERSION = 1;
+// Increment when extractor output shape changes to force full re-analysis
+const CACHE_VERSION = 2;
 const CACHE_FILENAME = 'file-cache.json';
 
 /** One cached entry per source file */
