@@ -119,6 +119,28 @@ test('query_prop_usage: Button variant prop is found', async () => {
   assert.ok(rows.length >= 1, `Expected at least 1 variant prop row for Button, got ${rows.length}`);
 });
 
+test('query_prop_usage: all props returned when prop_name omitted', async () => {
+  const rows = await callTool('query_prop_usage', {
+    package_name: '@acme/ui',
+    component_name: 'Button',
+  });
+  assert.ok(rows.length >= 1, `Expected prop rows for Button when prop_name omitted, got ${rows.length}`);
+
+  const propNames = [...new Set(rows.map((r) => r.prop_name))];
+  assert.ok(
+    propNames.includes('variant'),
+    `Expected "variant" in discovered props, got: ${JSON.stringify(propNames)}`,
+  );
+  assert.ok(
+    propNames.includes('size'),
+    `Expected "size" in discovered props, got: ${JSON.stringify(propNames)}`,
+  );
+  // Every row must include prop_name so the caller can tell props apart
+  for (const row of rows) {
+    assert.ok(row.prop_name != null, 'Each row should have a prop_name field');
+  }
+});
+
 test('query_export_usage: formatDate is called in multiple projects', async () => {
   const rows = await callTool('query_export_usage', {
     package_name: '@acme/utils',
