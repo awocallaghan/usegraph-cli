@@ -1,9 +1,6 @@
 /**
  * usegraph mcp — Model Context Protocol server over stdio.
  *
- * Implements the MCP JSON-RPC 2.0 protocol directly (without the
- * @modelcontextprotocol/sdk package) using newline-delimited JSON over stdin/stdout.
- *
  * Exposes 13 tools that query the Parquet tables produced by `usegraph build`:
  *
  *   Discovery:
@@ -28,9 +25,9 @@
  *     get_source_context        — source snippet for a prop/arg call site
  */
 
-import { createInterface } from 'readline';
 import { existsSync } from 'fs';
 import chalk from 'chalk';
+import * as z from 'zod';
 import {
   BUILT_DIR,
   PARQUET,
@@ -46,246 +43,6 @@ export interface McpOptions {
   /** No longer a network port — MCP runs over stdio */
   verbose?: boolean;
 }
-
-// ─── MCP protocol types ───────────────────────────────────────────────────────
-
-type JsonRpcId = string | number | null;
-
-interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  id?: JsonRpcId;
-  method: string;
-  params?: Record<string, unknown>;
-}
-
-interface JsonRpcResponse {
-  jsonrpc: '2.0';
-  id: JsonRpcId;
-  result?: unknown;
-  error?: { code: number; message: string; data?: unknown };
-}
-
-// ─── JSON Schema helpers for tool input schemas ───────────────────────────────
-
-type Schema =
-  | { type: 'object'; properties: Record<string, Schema>; required?: string[] }
-  | { type: 'string'; description?: string; enum?: string[] }
-  | { type: 'integer'; description?: string; minimum?: number }
-  | { type: 'boolean'; description?: string }
-  | { type: 'number'; description?: string };
-
-interface ToolDef {
-  name: string;
-  description: string;
-  inputSchema: Schema;
-}
-
-// ─── Tool definitions (SPEC §MCP Tools) ──────────────────────────────────────
-
-const TOOLS: ToolDef[] = [
-  // ── Discovery ────────────────────────────────────────────────────────────
-  {
-    name: 'get_scan_metadata',
-    description:
-      'Return overall statistics about the usegraph data store: project count, oldest/newest scan, schema versions in use, and any projects with stale data.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'list_projects',
-    description:
-      'List projects with their latest scan metadata, optionally filtered by framework or build tool.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        framework: { type: 'string', description: 'Filter to projects using this framework (e.g. "react", "next")' },
-        build_tool: { type: 'string', description: 'Filter to projects using this build tool (e.g. "vite", "webpack")' },
-        stale_after_days: {
-          type: 'integer',
-          description: 'Flag projects not scanned within this many days',
-          minimum: 1,
-        },
-      },
-    },
-  },
-  {
-    name: 'list_packages',
-    description:
-      'List npm packages detected across all projects, ranked by adoption count. Filter by scope, dependency type, or internal-only.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        scope: { type: 'string', description: 'npm scope prefix, e.g. "@acme" to filter to @acme/* packages' },
-        dep_type: {
-          type: 'string',
-          description: 'Dependency section: "dependencies", "devDependencies", "peerDependencies", or "optionalDependencies"',
-        },
-        internal_only: { type: 'boolean', description: 'If true, return only packages flagged as internal' },
-      },
-    },
-  },
-  {
-    name: 'get_project_snapshot',
-    description:
-      'Return the full latest snapshot for a project: tooling metadata and all its dependencies.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        project_id: { type: 'string', description: 'Project slug (e.g. "my-org--my-repo")' },
-      },
-      required: ['project_id'],
-    },
-  },
-
-  // ── Dependency tools ─────────────────────────────────────────────────────
-  {
-    name: 'query_dependency_versions',
-    description:
-      'Show the distribution of resolved versions for a specific npm package across all projects.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        package_name: { type: 'string', description: 'Exact npm package name, e.g. "react"' },
-        dep_type: { type: 'string', description: 'Filter by dependency section (optional)' },
-        include_prerelease: { type: 'boolean', description: 'Include prerelease versions (default: false)' },
-      },
-      required: ['package_name'],
-    },
-  },
-  {
-    name: 'query_prerelease_usage',
-    description:
-      'Find projects using prerelease (alpha/beta/rc) builds of an npm package.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        package_name: { type: 'string', description: 'Exact npm package name' },
-        prerelease_filter: {
-          type: 'string',
-          description: 'Substring to match inside the prerelease tag (e.g. "beta", "acme")',
-        },
-      },
-      required: ['package_name'],
-    },
-  },
-  {
-    name: 'query_tooling_distribution',
-    description:
-      'Show the distribution of a tooling category (framework, build tool, etc.) across all projects.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        category: {
-          type: 'string',
-          description: 'Tooling category column name',
-          enum: Array.from(TOOLING_CATEGORY_ALLOWLIST),
-        },
-      },
-      required: ['category'],
-    },
-  },
-
-  // ── Component tools ──────────────────────────────────────────────────────
-  {
-    name: 'query_component_usage',
-    description:
-      'Find all call sites where a React component from an npm package is used.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        package_name: { type: 'string', description: 'npm package that exports the component' },
-        component_name: { type: 'string', description: 'Component name, e.g. "Button"' },
-        package_version: { type: 'integer', description: 'Filter to a specific major version' },
-        include_prerelease: { type: 'boolean', description: 'Include prerelease package versions (default: false)' },
-      },
-      required: ['package_name', 'component_name'],
-    },
-  },
-  {
-    name: 'query_prop_usage',
-    description:
-      'Show how a specific prop is used on a React component across all projects: value types, static values, and source snippets for dynamic values.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        package_name: { type: 'string', description: 'npm package that exports the component' },
-        component_name: { type: 'string', description: 'Component name' },
-        prop_name: { type: 'string', description: 'Prop name, e.g. "variant"' },
-        package_version: { type: 'integer', description: 'Filter to a specific major version' },
-        include_prerelease: { type: 'boolean', description: 'Include prerelease package versions' },
-      },
-      required: ['package_name', 'component_name', 'prop_name'],
-    },
-  },
-  {
-    name: 'query_component_adoption_trend',
-    description:
-      'Show how many projects adopted a component (or an entire package) over time, grouped by month.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        package_name: { type: 'string', description: 'npm package name' },
-        component_name: { type: 'string', description: 'Optional: filter to a specific component' },
-        period_months: {
-          type: 'integer',
-          description: 'How many months back to look (default: 12)',
-          minimum: 1,
-        },
-      },
-      required: ['package_name'],
-    },
-  },
-
-  // ── Function / export tools ──────────────────────────────────────────────
-  {
-    name: 'query_export_usage',
-    description:
-      'Find all call sites for a specific function export from an npm package, including argument values.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        package_name: { type: 'string', description: 'npm package that exports the function' },
-        export_name: { type: 'string', description: 'Exported function name, e.g. "createTheme"' },
-        package_version: { type: 'integer', description: 'Filter to a specific major version' },
-        include_prerelease: { type: 'boolean', description: 'Include prerelease package versions' },
-      },
-      required: ['package_name', 'export_name'],
-    },
-  },
-  {
-    name: 'query_export_adoption_trend',
-    description:
-      'Show how many projects call a specific function export over time, grouped by month.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        package_name: { type: 'string', description: 'npm package name' },
-        export_name: { type: 'string', description: 'Exported function name' },
-        period_months: {
-          type: 'integer',
-          description: 'How many months back to look (default: 12)',
-          minimum: 1,
-        },
-      },
-      required: ['package_name', 'export_name'],
-    },
-  },
-  {
-    name: 'get_source_context',
-    description:
-      'Retrieve the stored source snippet and value for a specific prop or argument at a call site.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        project_id: { type: 'string', description: 'Project slug' },
-        file_path: { type: 'string', description: 'Relative file path within the project' },
-        line: { type: 'integer', description: 'Line number of the call site', minimum: 1 },
-        prop_name: { type: 'string', description: 'Prop name (for component props)' },
-        arg_index: { type: 'integer', description: 'Argument index (for function calls)', minimum: 0 },
-      },
-      required: ['project_id', 'file_path', 'line'],
-    },
-  },
-];
 
 // ─── Tool implementations ─────────────────────────────────────────────────────
 
@@ -728,107 +485,21 @@ export async function callTool(
   }
 }
 
-// ─── MCP JSON-RPC server (stdio) ──────────────────────────────────────────────
+// ─── MCP server (tmcp) ───────────────────────────────────────────────────────
 
-/** Write a JSON-RPC response to stdout (newline-delimited JSON). */
-function writeResponse(res: JsonRpcResponse): void {
-  process.stdout.write(JSON.stringify(res) + '\n');
-}
+// Use a runtime dynamic import to load ESM-only packages (tmcp, transport-stdio,
+// adapter-zod) from this CommonJS-compiled module.
+// eslint-disable-next-line no-new-func, @typescript-eslint/no-implied-eval
+const esmImport = new Function('s', 'return import(s)') as (s: string) => Promise<Record<string, unknown>>;
 
-/** Handle a single parsed JSON-RPC request. */
-async function handleRequest(req: JsonRpcRequest, verbose: boolean): Promise<void> {
-  const id = req.id ?? null;
+type ToolResult = { content: Array<{ type: 'text'; text: string }> };
+type ServerLike = {
+  tool: (opts: Record<string, unknown>, exec: (args: Record<string, unknown>) => Promise<ToolResult>) => void;
+};
+type TransportLike = { listen: () => void };
 
-  if (verbose) {
-    process.stderr.write(chalk.dim(`[mcp] → ${req.method}\n`));
-  }
-
-  // ── Protocol handshake ────────────────────────────────────────────────────
-  if (req.method === 'initialize') {
-    writeResponse({
-      jsonrpc: '2.0',
-      id,
-      result: {
-        protocolVersion: '2024-11-05',
-        capabilities: { tools: {} },
-        serverInfo: { name: 'usegraph', version: '0.1.0' },
-      },
-    });
-    return;
-  }
-
-  if (req.method === 'notifications/initialized' || req.method === 'initialized') {
-    // Notification — no response required
-    return;
-  }
-
-  if (req.method === 'ping') {
-    writeResponse({ jsonrpc: '2.0', id, result: {} });
-    return;
-  }
-
-  // ── Tool listing ──────────────────────────────────────────────────────────
-  if (req.method === 'tools/list') {
-    writeResponse({
-      jsonrpc: '2.0',
-      id,
-      result: { tools: TOOLS },
-    });
-    return;
-  }
-
-  // ── Tool execution ────────────────────────────────────────────────────────
-  if (req.method === 'tools/call') {
-    const params = req.params ?? {};
-    const name = params.name as string | undefined;
-    const args = (params.arguments ?? {}) as Record<string, unknown>;
-
-    if (!name) {
-      writeResponse({
-        jsonrpc: '2.0',
-        id,
-        error: { code: -32602, message: 'Missing tool name in params.name' },
-      });
-      return;
-    }
-
-    try {
-      const result = await callTool(name, args);
-      writeResponse({
-        jsonrpc: '2.0',
-        id,
-        result: {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        },
-      });
-    } catch (err) {
-      const code = (err as { code?: number }).code ?? -32000;
-      const message = err instanceof Error ? err.message : String(err);
-      if (verbose) {
-        process.stderr.write(chalk.red(`[mcp] tool error: ${message}\n`));
-      }
-      writeResponse({
-        jsonrpc: '2.0',
-        id,
-        error: { code, message },
-      });
-    }
-    return;
-  }
-
-  // ── Unknown method ────────────────────────────────────────────────────────
-  if (id !== null) {
-    writeResponse({
-      jsonrpc: '2.0',
-      id,
-      error: { code: -32601, message: `Method not found: ${req.method}` },
-    });
-  }
+function wrap(result: unknown): ToolResult {
+  return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
@@ -838,7 +509,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
 
   process.stderr.write(
     chalk.green('usegraph MCP server started') +
-      chalk.dim(' (stdio transport, newline-delimited JSON)\n'),
+      chalk.dim(' (stdio transport, tmcp)\n'),
   );
   process.stderr.write(chalk.dim(`  Parquet dir: ${BUILT_DIR}\n`));
 
@@ -850,34 +521,203 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
     );
   }
 
-  const rl = createInterface({ input: process.stdin, terminal: false });
+  const [{ McpServer }, { ZodJsonSchemaAdapter }, { StdioTransport }] = await Promise.all([
+    esmImport('tmcp'),
+    esmImport('@tmcp/adapter-zod'),
+    esmImport('@tmcp/transport-stdio'),
+  ]) as [
+    { McpServer: new (info: unknown, opts: unknown) => ServerLike },
+    { ZodJsonSchemaAdapter: new () => unknown },
+    { StdioTransport: new (server: unknown) => TransportLike },
+  ];
 
-  rl.on('line', (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
+  const server = new McpServer(
+    { name: 'usegraph', version: '0.1.0' },
+    { capabilities: { tools: {} }, adapter: new ZodJsonSchemaAdapter() },
+  );
 
-    let req: JsonRpcRequest;
-    try {
-      req = JSON.parse(trimmed) as JsonRpcRequest;
-    } catch {
-      writeResponse({
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: -32700, message: 'Parse error: invalid JSON' },
-      });
-      return;
-    }
+  if (verbose) {
+    process.stderr.write(chalk.dim('[mcp] registering tools\n'));
+  }
 
-    // Fire-and-forget — errors are caught inside handleRequest
-    handleRequest(req, verbose).catch((err) => {
-      process.stderr.write(
-        chalk.red(`[mcp] Unhandled error: ${(err as Error).message ?? String(err)}\n`),
-      );
-    });
-  });
+  // ── Discovery tools ────────────────────────────────────────────────────────
 
-  // Keep the process alive until stdin closes
+  server.tool(
+    {
+      name: 'get_scan_metadata',
+      description: 'Return overall statistics about the usegraph data store: project count, oldest/newest scan, schema versions in use, and any projects with stale data.',
+    },
+    async () => wrap(await toolGetScanMetadata()),
+  );
+
+  server.tool(
+    {
+      name: 'list_projects',
+      description: 'List projects with their latest scan metadata, optionally filtered by framework or build tool.',
+      schema: z.object({
+        framework: z.string().optional().describe('Filter to projects using this framework (e.g. "react", "next")'),
+        build_tool: z.string().optional().describe('Filter to projects using this build tool (e.g. "vite", "webpack")'),
+        stale_after_days: z.number().int().min(1).optional().describe('Flag projects not scanned within this many days'),
+      }),
+    },
+    async (input) => wrap(await toolListProjects(input as Parameters<typeof toolListProjects>[0])),
+  );
+
+  server.tool(
+    {
+      name: 'list_packages',
+      description: 'List npm packages detected across all projects, ranked by adoption count. Filter by scope, dependency type, or internal-only.',
+      schema: z.object({
+        scope: z.string().optional().describe('npm scope prefix, e.g. "@acme" to filter to @acme/* packages'),
+        dep_type: z.string().optional().describe('Dependency section: "dependencies", "devDependencies", "peerDependencies", or "optionalDependencies"'),
+        internal_only: z.boolean().optional().describe('If true, return only packages flagged as internal'),
+      }),
+    },
+    async (input) => wrap(await toolListPackages(input as Parameters<typeof toolListPackages>[0])),
+  );
+
+  server.tool(
+    {
+      name: 'get_project_snapshot',
+      description: 'Return the full latest snapshot for a project: tooling metadata and all its dependencies.',
+      schema: z.object({
+        project_id: z.string().describe('Project slug (e.g. "my-org--my-repo")'),
+      }),
+    },
+    async (input) => wrap(await toolGetProjectSnapshot(input as Parameters<typeof toolGetProjectSnapshot>[0])),
+  );
+
+  // ── Dependency tools ───────────────────────────────────────────────────────
+
+  server.tool(
+    {
+      name: 'query_dependency_versions',
+      description: 'Show the distribution of resolved versions for a specific npm package across all projects.',
+      schema: z.object({
+        package_name: z.string().describe('Exact npm package name, e.g. "react"'),
+        dep_type: z.string().optional().describe('Filter by dependency section (optional)'),
+        include_prerelease: z.boolean().optional().describe('Include prerelease versions (default: false)'),
+      }),
+    },
+    async (input) => wrap(await toolQueryDependencyVersions(input as Parameters<typeof toolQueryDependencyVersions>[0])),
+  );
+
+  server.tool(
+    {
+      name: 'query_prerelease_usage',
+      description: 'Find projects using prerelease (alpha/beta/rc) builds of an npm package.',
+      schema: z.object({
+        package_name: z.string().describe('Exact npm package name'),
+        prerelease_filter: z.string().optional().describe('Substring to match inside the prerelease tag (e.g. "beta", "acme")'),
+      }),
+    },
+    async (input) => wrap(await toolQueryPrereleaseUsage(input as Parameters<typeof toolQueryPrereleaseUsage>[0])),
+  );
+
+  server.tool(
+    {
+      name: 'query_tooling_distribution',
+      description: 'Show the distribution of a tooling category (framework, build tool, etc.) across all projects.',
+      schema: z.object({
+        category: z.enum(Array.from(TOOLING_CATEGORY_ALLOWLIST) as [string, ...string[]]).describe('Tooling category column name'),
+      }),
+    },
+    async (input) => wrap(await toolQueryToolingDistribution(input as Parameters<typeof toolQueryToolingDistribution>[0])),
+  );
+
+  // ── Component tools ────────────────────────────────────────────────────────
+
+  server.tool(
+    {
+      name: 'query_component_usage',
+      description: 'Find all call sites where a React component from an npm package is used.',
+      schema: z.object({
+        package_name: z.string().describe('npm package that exports the component'),
+        component_name: z.string().describe('Component name, e.g. "Button"'),
+        package_version: z.number().int().optional().describe('Filter to a specific major version'),
+        include_prerelease: z.boolean().optional().describe('Include prerelease package versions (default: false)'),
+      }),
+    },
+    async (input) => wrap(await toolQueryComponentUsage(input as Parameters<typeof toolQueryComponentUsage>[0])),
+  );
+
+  server.tool(
+    {
+      name: 'query_prop_usage',
+      description: 'Show how a specific prop is used on a React component across all projects: value types, static values, and source snippets for dynamic values.',
+      schema: z.object({
+        package_name: z.string().describe('npm package that exports the component'),
+        component_name: z.string().describe('Component name'),
+        prop_name: z.string().describe('Prop name, e.g. "variant"'),
+        package_version: z.number().int().optional().describe('Filter to a specific major version'),
+        include_prerelease: z.boolean().optional().describe('Include prerelease package versions'),
+      }),
+    },
+    async (input) => wrap(await toolQueryPropUsage(input as Parameters<typeof toolQueryPropUsage>[0])),
+  );
+
+  server.tool(
+    {
+      name: 'query_component_adoption_trend',
+      description: 'Show how many projects adopted a component (or an entire package) over time, grouped by month.',
+      schema: z.object({
+        package_name: z.string().describe('npm package name'),
+        component_name: z.string().optional().describe('Optional: filter to a specific component'),
+        period_months: z.number().int().min(1).optional().describe('How many months back to look (default: 12)'),
+      }),
+    },
+    async (input) => wrap(await toolQueryComponentAdoptionTrend(input as Parameters<typeof toolQueryComponentAdoptionTrend>[0])),
+  );
+
+  // ── Function / export tools ────────────────────────────────────────────────
+
+  server.tool(
+    {
+      name: 'query_export_usage',
+      description: 'Find all call sites for a specific function export from an npm package, including argument values.',
+      schema: z.object({
+        package_name: z.string().describe('npm package that exports the function'),
+        export_name: z.string().describe('Exported function name, e.g. "createTheme"'),
+        package_version: z.number().int().optional().describe('Filter to a specific major version'),
+        include_prerelease: z.boolean().optional().describe('Include prerelease package versions'),
+      }),
+    },
+    async (input) => wrap(await toolQueryExportUsage(input as Parameters<typeof toolQueryExportUsage>[0])),
+  );
+
+  server.tool(
+    {
+      name: 'query_export_adoption_trend',
+      description: 'Show how many projects call a specific function export over time, grouped by month.',
+      schema: z.object({
+        package_name: z.string().describe('npm package name'),
+        export_name: z.string().describe('Exported function name'),
+        period_months: z.number().int().min(1).optional().describe('How many months back to look (default: 12)'),
+      }),
+    },
+    async (input) => wrap(await toolQueryExportAdoptionTrend(input as Parameters<typeof toolQueryExportAdoptionTrend>[0])),
+  );
+
+  server.tool(
+    {
+      name: 'get_source_context',
+      description: 'Retrieve the stored source snippet and value for a specific prop or argument at a call site.',
+      schema: z.object({
+        project_id: z.string().describe('Project slug'),
+        file_path: z.string().describe('Relative file path within the project'),
+        line: z.number().int().min(1).describe('Line number of the call site'),
+        prop_name: z.string().optional().describe('Prop name (for component props)'),
+        arg_index: z.number().int().min(0).optional().describe('Argument index (for function calls)'),
+      }),
+    },
+    async (input) => wrap(await toolGetSourceContext(input as Parameters<typeof toolGetSourceContext>[0])),
+  );
+
+  const transport = new StdioTransport(server as unknown);
+  transport.listen();
+
+  // Keep the process alive until stdin closes (StdioTransport calls process.exit on close)
   await new Promise<void>((resolve) => {
-    rl.on('close', resolve);
+    process.stdin.on('close', resolve);
   });
 }
