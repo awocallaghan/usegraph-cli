@@ -499,7 +499,7 @@ type ServerLike = {
 type TransportLike = { listen: () => void };
 
 function wrap(result: unknown): ToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  return { content: [{ type: 'text', text: JSON.stringify(result, (_, v) => typeof v === 'bigint' ? Number(v) : v, 2) }] };
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
