@@ -54,6 +54,17 @@ export function requireParquet(name: keyof typeof PARQUET): string {
   return path;
 }
 
+/** Recursively convert BigInt values to Number so rows are JSON-serializable. */
+function sanitizeBigInt(val: unknown): unknown {
+  if (typeof val === 'bigint') return Number(val);
+  if (Array.isArray(val)) return val.map(sanitizeBigInt);
+  if (val !== null && typeof val === 'object')
+    return Object.fromEntries(
+      Object.entries(val as Record<string, unknown>).map(([k, v]) => [k, sanitizeBigInt(v)]),
+    );
+  return val;
+}
+
 /** Open an in-memory DuckDB and run a query against the Parquet files. */
 export async function queryParquet(sql: string): Promise<Record<string, unknown>[]> {
   let duckdb: typeof import('duckdb');
@@ -79,7 +90,7 @@ export async function queryParquet(sql: string): Promise<Record<string, unknown>
     const rows = await new Promise<Record<string, unknown>[]>((resolve, reject) => {
       conn.all(sql, (err, result) => {
         if (err) reject(new Error((err as Error).message ?? String(err)));
-        else resolve((result ?? []) as Record<string, unknown>[]);
+        else resolve((result ?? []).map((r) => sanitizeBigInt(r) as Record<string, unknown>));
       });
     });
     return rows;

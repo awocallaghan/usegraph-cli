@@ -153,6 +153,18 @@ test('query_dependency_versions: react 18.2.0 is present', async () => {
     versions.includes('18.2.0'),
     `Expected version 18.2.0 for react, got: ${JSON.stringify(versions)}`,
   );
+
+  // BigInt must not appear in results — JSON.stringify would throw if it did
+  assert.doesNotThrow(
+    () => JSON.stringify(rows),
+    'query_dependency_versions result must be JSON-serializable (no BigInt values)',
+  );
+  const react18 = rows.find((r) => r.version_resolved === '18.2.0');
+  assert.strictEqual(
+    typeof react18.version_major,
+    'number',
+    `version_major should be a number, not ${typeof react18.version_major}`,
+  );
 });
 
 test('get_scan_metadata: project_count is 6', async () => {
