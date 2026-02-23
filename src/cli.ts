@@ -60,8 +60,8 @@ export function createCli(): Command {
     .option('--package <package>', 'Filter output to a specific npm package')
     .option('--framework <framework>', 'Filter projects by framework (e.g. "react", "next")')
     .option('--build-tool <tool>', 'Filter projects by build tool (e.g. "vite", "webpack")')
-    .option('--component <component>', 'Filter to a specific component name')
-    .option('--export <export>', 'Filter to a specific function export name')
+    .option('--component <component>', 'Show detail for a specific component (requires --package)')
+    .option('--export <export>', 'Show detail for a specific function export (requires --package)')
     .option('--stale-days <n>', 'Flag projects not scanned within N days (default: 7)', parseInt)
     .option('--json', 'Print raw JSON to stdout')
     .action(async (opts) => {

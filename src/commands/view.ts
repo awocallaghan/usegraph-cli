@@ -10,13 +10,15 @@
  *     --package <name>       Filter to a specific npm package
  *     --framework <name>     Filter projects by framework (e.g. "react", "next")
  *     --build-tool <name>    Filter projects by build tool (e.g. "vite", "webpack")
- *     --component <name>     Filter to a specific component name
- *     --export <name>        Filter to a specific function export name
+ *     --component <name>     Show detail for a specific component (requires --package)
+ *     --export <name>        Show detail for a specific function export (requires --package)
  *     --stale-days <n>       Flag projects not scanned within N days (default: 7)
  *     --json                 Print raw JSON to stdout
  *
- * Renders a single-project detail view when exactly one project matches,
- * or an aggregated multi-project dashboard when multiple projects match.
+ * Modes:
+ *   --component + --package  → component detail view (prop breakdown across projects)
+ *   --export    + --package  → export detail view (arg breakdown across projects)
+ *   (default)                → single-project or multi-project overview
  */
 import chalk from 'chalk';
 import { queryParquet, requireParquet, sqlStr } from '../parquet-query';
@@ -87,12 +89,49 @@ interface SnapshotRow {
   node_version: string | null;
 }
 
+interface PropUsageRow {
+  project_id: string;
+  file_path: string;
+  line: number;
+  prop_name: string;
+  value_type: string;
+  value: string | null;
+  source_snippet: string | null;
+}
+
+interface ArgUsageRow {
+  project_id: string;
+  file_path: string;
+  line: number;
+  arg_index: number;
+  value_type: string;
+  value: string | null;
+  source_snippet: string | null;
+}
+
+interface ProjectCallCountRow {
+  project_id: string;
+  site_count: number;
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 export async function runView(opts: ViewCommandOptions): Promise<void> {
+  // Validate: --component / --export require --package
+  if (opts.component && !opts.package) {
+    console.error(chalk.red('Error: --component requires --package to be specified.'));
+    console.error(chalk.dim('  Example: usegraph view --package @acme/ui --component Button'));
+    process.exit(1);
+  }
+  if (opts.export && !opts.package) {
+    console.error(chalk.red('Error: --export requires --package to be specified.'));
+    console.error(chalk.dim('  Example: usegraph view --package @acme/utils --export formatDate'));
+    process.exit(1);
+  }
+
   const staleDays = typeof opts.staleDays === 'number' ? opts.staleDays : 7;
 
-  // 1. Load matching projects
+  // Load matching projects (used by all modes)
   const projects = await loadProjects(opts, staleDays);
 
   if (projects.length === 0) {
@@ -105,6 +144,28 @@ export async function runView(opts: ViewCommandOptions): Promise<void> {
     process.exit(1);
   }
 
+  // ── Mode dispatch ──────────────────────────────────────────────────────────
+  if (opts.component && opts.package) {
+    if (opts.json) {
+      const rows = await loadPropUsages(opts.package, opts.component, opts.project);
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    await printComponentDetail(projects, opts.package, opts.component, opts.project);
+    return;
+  }
+
+  if (opts.export && opts.package) {
+    if (opts.json) {
+      const rows = await loadArgUsages(opts.package, opts.export, opts.project);
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    await printExportDetail(projects, opts.package, opts.export, opts.project);
+    return;
+  }
+
+  // ── Overview modes ─────────────────────────────────────────────────────────
   if (opts.json) {
     if (projects.length === 1) {
       const detail = await loadProjectDetail(projects[0].project_id, opts);
@@ -171,8 +232,6 @@ async function loadProjectDetail(
   const id = sqlStr(projectId);
 
   const pkgFilter = opts.package ? `AND package_name = '${sqlStr(opts.package)}'` : '';
-  const compFilter = opts.component ? `AND component_name = '${sqlStr(opts.component)}'` : '';
-  const exportFilter = opts.export ? `AND export_name = '${sqlStr(opts.export)}'` : '';
 
   const [snapshotRows, deps, components, exports] = await Promise.all([
     queryParquet(`
@@ -196,7 +255,6 @@ async function loadProjectDetail(
       FROM read_parquet('${sqlStr(cu)}')
       WHERE project_id = '${id}' AND is_latest = true
         ${pkgFilter}
-        ${compFilter}
       GROUP BY project_id, package_name, component_name
       ORDER BY usage_count DESC
       LIMIT 200
@@ -210,7 +268,6 @@ async function loadProjectDetail(
       FROM read_parquet('${sqlStr(fu)}')
       WHERE project_id = '${id}' AND is_latest = true
         ${pkgFilter}
-        ${exportFilter}
       GROUP BY project_id, package_name, export_name
       ORDER BY call_count DESC
       LIMIT 200
@@ -223,6 +280,261 @@ async function loadProjectDetail(
     components: components as unknown as ComponentUsageRow[],
     exports: exports as unknown as ExportUsageRow[],
   };
+}
+
+async function loadPropUsages(
+  packageName: string,
+  componentName: string,
+  projectId?: string,
+): Promise<PropUsageRow[]> {
+  const p = requireParquet('component_prop_usages');
+  const projectFilter = projectId ? `AND project_id = '${sqlStr(projectId)}'` : '';
+  return queryParquet(`
+    SELECT project_id, file_path, line, prop_name, value_type, value::VARCHAR AS value, source_snippet
+    FROM read_parquet('${sqlStr(p)}')
+    WHERE is_latest = true
+      AND package_name   = '${sqlStr(packageName)}'
+      AND component_name = '${sqlStr(componentName)}'
+      ${projectFilter}
+    ORDER BY prop_name, project_id, line
+    LIMIT 2000
+  `) as unknown as Promise<PropUsageRow[]>;
+}
+
+async function loadArgUsages(
+  packageName: string,
+  exportName: string,
+  projectId?: string,
+): Promise<ArgUsageRow[]> {
+  const p = requireParquet('function_arg_usages');
+  const projectFilter = projectId ? `AND project_id = '${sqlStr(projectId)}'` : '';
+  return queryParquet(`
+    SELECT project_id, file_path, line, arg_index, value_type, value::VARCHAR AS value, source_snippet
+    FROM read_parquet('${sqlStr(p)}')
+    WHERE is_latest = true
+      AND package_name = '${sqlStr(packageName)}'
+      AND export_name  = '${sqlStr(exportName)}'
+      ${projectFilter}
+    ORDER BY arg_index, project_id, line
+    LIMIT 2000
+  `) as unknown as Promise<ArgUsageRow[]>;
+}
+
+async function loadCallSiteCounts(
+  table: 'component_usages' | 'function_usages',
+  packageName: string,
+  nameField: string,
+  nameValue: string,
+  projectId?: string,
+): Promise<ProjectCallCountRow[]> {
+  const p = requireParquet(table);
+  const projectFilter = projectId ? `AND project_id = '${sqlStr(projectId)}'` : '';
+  return queryParquet(`
+    SELECT project_id, COUNT(*)::INTEGER AS site_count
+    FROM read_parquet('${sqlStr(p)}')
+    WHERE is_latest = true
+      AND package_name = '${sqlStr(packageName)}'
+      AND ${nameField} = '${sqlStr(nameValue)}'
+      ${projectFilter}
+    GROUP BY project_id
+    ORDER BY site_count DESC
+  `) as unknown as Promise<ProjectCallCountRow[]>;
+}
+
+// ─── Component detail view ────────────────────────────────────────────────────
+
+async function printComponentDetail(
+  projects: ProjectRow[],
+  packageName: string,
+  componentName: string,
+  projectId?: string,
+): Promise<void> {
+  const [propRows, callCounts] = await Promise.all([
+    loadPropUsages(packageName, componentName, projectId),
+    loadCallSiteCounts('component_usages', packageName, 'component_name', componentName, projectId),
+  ]);
+
+  // ── Header ─────────────────────────────────────────────────────────────────
+  console.log('');
+  console.log(chalk.bold.blue('╔══════════════════════════════════════════╗'));
+  console.log(chalk.bold.blue('║       usegraph view — component          ║'));
+  console.log(chalk.bold.blue('╚══════════════════════════════════════════╝'));
+  console.log('');
+  console.log(`  Component:  ${chalk.bold.green(componentName)}`);
+  console.log(`  Package:    ${chalk.bold.cyan(packageName)}`);
+  const projectScope = projectId ? ` (project: ${projectId})` : ` across ${projects.length} project${projects.length !== 1 ? 's' : ''}`;
+  console.log(`  Scope:      ${chalk.dim(projectScope)}`);
+  console.log('');
+
+  if (callCounts.length === 0) {
+    console.log(chalk.dim(`  No usages of ${componentName} from ${packageName} found.`));
+    console.log('');
+    return;
+  }
+
+  // ── Per-project adoption ──────────────────────────────────────────────────
+  console.log(chalk.bold('Adoption by project'));
+  const totalSites = callCounts.reduce((s, r) => s + r.site_count, 0);
+  for (const row of callCounts) {
+    const bar = '█'.repeat(Math.min(10, row.site_count));
+    console.log(
+      `  ${chalk.bold(row.project_id.padEnd(36))}  ${chalk.blue(bar)}  ` +
+        `${String(row.site_count).padStart(4)} site${row.site_count !== 1 ? 's' : ''}`,
+    );
+  }
+  console.log(chalk.dim(`  Total: ${totalSites} usage site${totalSites !== 1 ? 's' : ''} across ${callCounts.length} project${callCounts.length !== 1 ? 's' : ''}`));
+  console.log('');
+
+  if (propRows.length === 0) {
+    console.log(chalk.dim(`  No prop data recorded (component may have no tracked props).`));
+    console.log('');
+    return;
+  }
+
+  // ── Prop breakdown ─────────────────────────────────────────────────────────
+  console.log(chalk.bold('Prop usage'));
+  console.log('');
+
+  const byProp = groupBy(propRows, (r) => r.prop_name);
+  for (const [prop, rows] of byProp) {
+    const staticRows = rows.filter((r) => r.value_type === 'static');
+    const dynamicRows = rows.filter((r) => r.value_type !== 'static');
+
+    console.log(`  ${chalk.bold.yellow(prop)}  ${chalk.dim(`(${rows.length} total)`)}`);
+
+    // Static value frequency table
+    if (staticRows.length > 0) {
+      const freq = new Map<string, number>();
+      for (const r of staticRows) {
+        const key = r.value ?? 'null';
+        freq.set(key, (freq.get(key) ?? 0) + 1);
+      }
+      const sorted = [...freq.entries()].sort((a, b) => b[1] - a[1]);
+      for (const [val, count] of sorted) {
+        const bar = '█'.repeat(Math.min(8, count));
+        console.log(
+          `    ${chalk.green(JSON.stringify(val).padEnd(28))}  ${chalk.blue(bar)}  ${count}`,
+        );
+      }
+    }
+
+    // Dynamic usages
+    if (dynamicRows.length > 0) {
+      console.log(`    ${chalk.dim(`${dynamicRows.length} dynamic value${dynamicRows.length !== 1 ? 's' : ''}`)}`);
+      const snippets = dynamicRows
+        .filter((r) => r.source_snippet)
+        .slice(0, 3);
+      for (const r of snippets) {
+        const preview = (r.source_snippet ?? '').split('\n').find((l) => l.includes(prop)) ?? r.source_snippet ?? '';
+        console.log(`    ${chalk.dim('↳')} ${chalk.italic(chalk.dim(preview.trim()))}`);
+      }
+      if (dynamicRows.filter((r) => r.source_snippet).length > 3) {
+        console.log(`    ${chalk.dim(`… and ${dynamicRows.filter((r) => r.source_snippet).length - 3} more`)}`);
+      }
+    }
+
+    console.log('');
+  }
+
+  console.log(chalk.dim('Tip: use --project to narrow to a single project.'));
+}
+
+// ─── Export detail view ───────────────────────────────────────────────────────
+
+async function printExportDetail(
+  projects: ProjectRow[],
+  packageName: string,
+  exportName: string,
+  projectId?: string,
+): Promise<void> {
+  const [argRows, callCounts] = await Promise.all([
+    loadArgUsages(packageName, exportName, projectId),
+    loadCallSiteCounts('function_usages', packageName, 'export_name', exportName, projectId),
+  ]);
+
+  // ── Header ─────────────────────────────────────────────────────────────────
+  console.log('');
+  console.log(chalk.bold.blue('╔══════════════════════════════════════════╗'));
+  console.log(chalk.bold.blue('║       usegraph view — export             ║'));
+  console.log(chalk.bold.blue('╚══════════════════════════════════════════╝'));
+  console.log('');
+  console.log(`  Export:     ${chalk.bold.green(exportName)}`);
+  console.log(`  Package:    ${chalk.bold.cyan(packageName)}`);
+  const projectScope = projectId ? ` (project: ${projectId})` : ` across ${projects.length} project${projects.length !== 1 ? 's' : ''}`;
+  console.log(`  Scope:      ${chalk.dim(projectScope)}`);
+  console.log('');
+
+  if (callCounts.length === 0) {
+    console.log(chalk.dim(`  No calls to ${exportName} from ${packageName} found.`));
+    console.log('');
+    return;
+  }
+
+  // ── Per-project adoption ──────────────────────────────────────────────────
+  console.log(chalk.bold('Adoption by project'));
+  const totalSites = callCounts.reduce((s, r) => s + r.site_count, 0);
+  for (const row of callCounts) {
+    const bar = '█'.repeat(Math.min(10, row.site_count));
+    console.log(
+      `  ${chalk.bold(row.project_id.padEnd(36))}  ${chalk.blue(bar)}  ` +
+        `${String(row.site_count).padStart(4)} call${row.site_count !== 1 ? 's' : ''}`,
+    );
+  }
+  console.log(chalk.dim(`  Total: ${totalSites} call site${totalSites !== 1 ? 's' : ''} across ${callCounts.length} project${callCounts.length !== 1 ? 's' : ''}`));
+  console.log('');
+
+  if (argRows.length === 0) {
+    console.log(chalk.dim(`  No argument data recorded (export may be called with no args).`));
+    console.log('');
+    return;
+  }
+
+  // ── Argument breakdown ────────────────────────────────────────────────────
+  console.log(chalk.bold('Argument usage'));
+  console.log('');
+
+  const byArg = groupBy(argRows, (r) => String(r.arg_index));
+  for (const [idx, rows] of byArg) {
+    const staticRows = rows.filter((r) => r.value_type === 'static');
+    const dynamicRows = rows.filter((r) => r.value_type !== 'static');
+
+    console.log(`  ${chalk.bold.yellow(`arg[${idx}]`)}  ${chalk.dim(`(${rows.length} total)`)}`);
+
+    // Static value frequency table
+    if (staticRows.length > 0) {
+      const freq = new Map<string, number>();
+      for (const r of staticRows) {
+        const key = r.value ?? 'null';
+        freq.set(key, (freq.get(key) ?? 0) + 1);
+      }
+      const sorted = [...freq.entries()].sort((a, b) => b[1] - a[1]);
+      for (const [val, count] of sorted) {
+        const bar = '█'.repeat(Math.min(8, count));
+        console.log(
+          `    ${chalk.green(JSON.stringify(val).padEnd(28))}  ${chalk.blue(bar)}  ${count}`,
+        );
+      }
+    }
+
+    // Dynamic usages
+    if (dynamicRows.length > 0) {
+      console.log(`    ${chalk.dim(`${dynamicRows.length} dynamic value${dynamicRows.length !== 1 ? 's' : ''}`)}`);
+      const snippets = dynamicRows
+        .filter((r) => r.source_snippet)
+        .slice(0, 3);
+      for (const r of snippets) {
+        const preview = (r.source_snippet ?? '').split('\n').find((l) => l.includes(exportName)) ?? r.source_snippet ?? '';
+        console.log(`    ${chalk.dim('↳')} ${chalk.italic(chalk.dim(preview.trim()))}`);
+      }
+      if (dynamicRows.filter((r) => r.source_snippet).length > 3) {
+        console.log(`    ${chalk.dim(`… and ${dynamicRows.filter((r) => r.source_snippet).length - 3} more`)}`);
+      }
+    }
+
+    console.log('');
+  }
+
+  console.log(chalk.dim('Tip: use --project to narrow to a single project.'));
 }
 
 // ─── Single-project view ──────────────────────────────────────────────────────
@@ -284,7 +596,6 @@ async function printSingleProject(
   // ── Component usages ──────────────────────────────────────────────────────
   if (components.length > 0) {
     console.log(chalk.bold('Component usages:'));
-    // Group by package
     const byPackage = groupBy(components, (r) => r.package_name);
     for (const [pkg, rows] of byPackage) {
       console.log(`  ${chalk.bold.cyan(pkg)}`);
@@ -314,13 +625,13 @@ async function printSingleProject(
 
   if (components.length === 0 && exportRows.length === 0) {
     console.log(chalk.dim('  No tracked package usage found.'));
-    if (opts.package || opts.component || opts.export) {
+    if (opts.package) {
       console.log(chalk.dim('  Try removing filters to see all usage.'));
     }
     console.log('');
   }
 
-  console.log(chalk.dim('Tip: use --component, --export, or --package to filter results.'));
+  console.log(chalk.dim('Tip: use --package to filter, or --component/--export (with --package) for detail views.'));
 }
 
 // ─── Multi-project view ───────────────────────────────────────────────────────
@@ -333,8 +644,6 @@ async function printMultiProject(
   const fu = requireParquet('function_usages');
 
   const pkgFilter = opts.package ? `AND package_name = '${sqlStr(opts.package)}'` : '';
-  const compFilter = opts.component ? `AND component_name = '${sqlStr(opts.component)}'` : '';
-  const exportFilter = opts.export ? `AND export_name = '${sqlStr(opts.export)}'` : '';
 
   // Load aggregate component + export usage across all shown projects
   const projectIdList = projects.map((p) => `'${sqlStr(p.project_id)}'`).join(', ');
@@ -351,7 +660,6 @@ async function printMultiProject(
       WHERE is_latest = true
         ${projectInFilter}
         ${pkgFilter}
-        ${compFilter}
       GROUP BY package_name, component_name
       ORDER BY project_count DESC, total_usages DESC
       LIMIT 50
@@ -366,7 +674,6 @@ async function printMultiProject(
       WHERE is_latest = true
         ${projectInFilter}
         ${pkgFilter}
-        ${exportFilter}
       GROUP BY package_name, export_name
       ORDER BY project_count DESC, total_calls DESC
       LIMIT 50
@@ -387,8 +694,6 @@ async function printMultiProject(
   console.log('');
   console.log(`  ${projects.length} project${projects.length !== 1 ? 's' : ''} loaded`);
   if (opts.package) console.log(`  Filtering by package: ${chalk.cyan(opts.package)}`);
-  if (opts.component) console.log(`  Filtering by component: ${chalk.cyan(opts.component)}`);
-  if (opts.export) console.log(`  Filtering by export: ${chalk.cyan(opts.export)}`);
   console.log('');
 
   // ── Projects table ─────────────────────────────────────────────────────────
@@ -464,7 +769,8 @@ async function printMultiProject(
     console.log('');
   }
 
-  console.log(chalk.dim('Tip: use --project, --package, --component, or --export to filter.'));
+  console.log(chalk.dim('Tip: use --project, --package to filter.'));
+  console.log(chalk.dim('     use --component/--export (with --package) for detailed prop/arg views.'));
   console.log(chalk.dim('     use --framework or --build-tool to narrow to a subset of projects.'));
 }
 
@@ -500,3 +806,4 @@ function buildToolingOverview(projects: ProjectRow[]): Array<[string, string, nu
 function increment(map: Map<string, number>, key: string): void {
   map.set(key, (map.get(key) ?? 0) + 1);
 }
+
