@@ -29,41 +29,16 @@
  */
 
 import { createInterface } from 'readline';
-import { join } from 'path';
-import { homedir } from 'os';
 import { existsSync } from 'fs';
 import chalk from 'chalk';
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-/**
- * Root of the global store.
- * Override with the `USEGRAPH_HOME` environment variable (useful for testing).
- */
-const STORE_ROOT = process.env.USEGRAPH_HOME ?? join(homedir(), '.usegraph');
-const BUILT_DIR = join(STORE_ROOT, 'built');
-
-const PARQUET = {
-  project_snapshots: join(BUILT_DIR, 'project_snapshots.parquet'),
-  dependencies: join(BUILT_DIR, 'dependencies.parquet'),
-  component_usages: join(BUILT_DIR, 'component_usages.parquet'),
-  component_prop_usages: join(BUILT_DIR, 'component_prop_usages.parquet'),
-  function_usages: join(BUILT_DIR, 'function_usages.parquet'),
-  function_arg_usages: join(BUILT_DIR, 'function_arg_usages.parquet'),
-} as const;
-
-/** Tooling categories that may appear as a SQL column name */
-const TOOLING_CATEGORY_ALLOWLIST = new Set([
-  'test_framework',
-  'build_tool',
-  'package_manager',
-  'bundler',
-  'linter',
-  'formatter',
-  'css_approach',
-  'framework',
-  'typescript',
-]);
+import {
+  BUILT_DIR,
+  PARQUET,
+  TOOLING_CATEGORY_ALLOWLIST,
+  queryParquet,
+  requireParquet,
+  sqlStr,
+} from '../parquet-query';
 
 // ─── CLI options ──────────────────────────────────────────────────────────────
 
@@ -311,60 +286,6 @@ const TOOLS: ToolDef[] = [
     },
   },
 ];
-
-// ─── DuckDB helper ────────────────────────────────────────────────────────────
-
-/** Open an in-memory DuckDB and run a query against the Parquet files. */
-async function queryParquet(sql: string): Promise<Record<string, unknown>[]> {
-  // Dynamic import — only load native module when mcp is invoked
-  let duckdb: typeof import('duckdb');
-  try {
-    duckdb = await import('duckdb');
-  } catch (err) {
-    throw new Error(
-      'DuckDB failed to load. Run `pnpm add duckdb && pnpm rebuild duckdb`.\n' +
-        `  Original error: ${String(err)}`,
-    );
-  }
-
-  const db = await new Promise<import('duckdb').Database>((resolve, reject) => {
-    const inst = new duckdb.Database(':memory:', (err) => {
-      if (err) reject(err);
-      else resolve(inst);
-    });
-  });
-
-  const conn = db.connect();
-
-  try {
-    const rows = await new Promise<Record<string, unknown>[]>((resolve, reject) => {
-      conn.all(sql, (err, result) => {
-        if (err) reject(new Error((err as Error).message ?? String(err)));
-        else resolve((result ?? []) as Record<string, unknown>[]);
-      });
-    });
-    return rows;
-  } finally {
-    conn.close();
-    await new Promise<void>((res) => db.close(() => res()));
-  }
-}
-
-/** Escape a string value for embedding inside a SQL string literal. */
-function sqlStr(s: string): string {
-  return s.replace(/'/g, "''");
-}
-
-/** Check if a Parquet file exists, throw a clear error if not. */
-function requireParquet(name: keyof typeof PARQUET): string {
-  const path = PARQUET[name];
-  if (!existsSync(path)) {
-    throw new Error(
-      `Parquet file not found: ${path}\n  Run \`usegraph build\` first.`,
-    );
-  }
-  return path;
-}
 
 // ─── Tool implementations ─────────────────────────────────────────────────────
 

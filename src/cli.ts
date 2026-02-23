@@ -3,8 +3,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import chalk from 'chalk';
 import { runScan } from './commands/scan';
-import { runReport } from './commands/report';
-import { runDashboard } from './commands/dashboard';
+import { runView } from './commands/view';
 import { runServe } from './commands/serve';
 import { runBuild } from './commands/build';
 import { runMcp } from './commands/mcp';
@@ -53,38 +52,24 @@ export function createCli(): Command {
       }
     });
 
-  // ── report ────────────────────────────────────────────────────────────────
+  // ── view ──────────────────────────────────────────────────────────────────
   program
-    .command('report [path]')
-    .description('Show a terminal report of the latest scan results')
-    .option('-s, --scan <id>', 'Load a specific scan by ID instead of the latest')
-    .option('--package <package>', 'Filter output to a single package')
-    .option('-o, --output <dir>', 'Output directory where results are stored (default: ~/.usegraph/<slug>)')
-    .option('--files', 'Show file-level usage breakdown')
+    .command('view')
+    .description('View scan results in the terminal (queries ~/.usegraph/built/ Parquet tables)')
+    .option('--project <slug>', 'Filter to a specific project slug')
+    .option('--package <package>', 'Filter output to a specific npm package')
+    .option('--framework <framework>', 'Filter projects by framework (e.g. "react", "next")')
+    .option('--build-tool <tool>', 'Filter projects by build tool (e.g. "vite", "webpack")')
+    .option('--component <component>', 'Filter to a specific component name')
+    .option('--export <export>', 'Filter to a specific function export name')
+    .option('--stale-days <n>', 'Flag projects not scanned within N days (default: 7)', parseInt)
     .option('--json', 'Print raw JSON to stdout')
-    .action(async (path: string | undefined, opts) => {
+    .action(async (opts) => {
       try {
-        await runReport(path, opts);
+        await runView(opts);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(chalk.red(`Unexpected error during report: ${message}`));
-        process.exit(1);
-      }
-    });
-
-  // ── dashboard ─────────────────────────────────────────────────────────────
-  program
-    .command('dashboard [paths...]')
-    .description('Show aggregated usage dashboard across one or more projects')
-    .option('--package <package>', 'Filter to a specific package')
-    .option('-o, --output <dir>', 'Scan output dir within each project (default: ~/.usegraph/<slug>)')
-    .option('--json', 'Print raw JSON to stdout')
-    .action(async (paths: string[], opts) => {
-      try {
-        await runDashboard(paths, opts);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(chalk.red(`Unexpected error during dashboard: ${message}`));
+        console.error(chalk.red(`Error: ${message}`));
         process.exit(1);
       }
     });
