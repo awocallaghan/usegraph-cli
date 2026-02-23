@@ -264,14 +264,16 @@ async function toolQueryComponentUsage(args: {
 async function toolQueryPropUsage(args: {
   package_name: string;
   component_name: string;
-  prop_name: string;
+  prop_name?: string;
   package_version?: number;
   include_prerelease?: boolean;
 }): Promise<unknown> {
   const p = requireParquet('component_prop_usages');
   const pkgFilter = `AND package_name = '${sqlStr(args.package_name)}'`;
   const compFilter = `AND component_name = '${sqlStr(args.component_name)}'`;
-  const propFilter = `AND prop_name = '${sqlStr(args.prop_name)}'`;
+  const propFilter = args.prop_name
+    ? `AND prop_name = '${sqlStr(args.prop_name)}'`
+    : '';
   const versionFilter =
     typeof args.package_version === 'number'
       ? `AND package_version_major = ${args.package_version}`
@@ -283,6 +285,7 @@ async function toolQueryPropUsage(args: {
       project_id,
       file_path,
       line,
+      prop_name,
       value_type,
       value,
       source_snippet,
@@ -294,8 +297,8 @@ async function toolQueryPropUsage(args: {
       ${propFilter}
       ${versionFilter}
       ${prereleaseFilter}
-    ORDER BY project_id, file_path, line
-    LIMIT 100
+    ORDER BY prop_name, project_id, file_path, line
+    LIMIT 200
   `);
 }
 
@@ -644,11 +647,11 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_prop_usage',
-      description: 'Show how a specific prop is used on a React component across all projects: value types, static values, and source snippets for dynamic values.',
+      description: 'Show how props are used on a React component across all projects: value types, static values, and source snippets for dynamic values. Omit prop_name to return all props used on this component (useful for discovery).',
       schema: z.object({
         package_name: z.string().describe('npm package that exports the component'),
         component_name: z.string().describe('Component name'),
-        prop_name: z.string().describe('Prop name, e.g. "variant"'),
+        prop_name: z.string().optional().describe('Prop name to filter to, e.g. "variant". Omit to return all props used on this component.'),
         package_version: z.number().int().optional().describe('Filter to a specific major version'),
         include_prerelease: z.boolean().optional().describe('Include prerelease package versions'),
       }),
