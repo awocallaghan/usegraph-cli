@@ -163,3 +163,36 @@ test('get_scan_metadata: project_count is 6', async () => {
     `Expected project_count=6, got ${meta.project_count}`,
   );
 });
+
+test('internal imports are not captured: no relative/alias paths in component or function usages', async () => {
+  const { queryParquet, requireParquet } = require('../dist/parquet-query');
+
+  const cuPath = requireParquet('component_usages');
+  const fuPath = requireParquet('function_usages');
+
+  const [componentRows, functionRows] = await Promise.all([
+    queryParquet(`SELECT DISTINCT package_name FROM read_parquet('${cuPath.replace(/'/g, "''")}') WHERE is_latest = true`),
+    queryParquet(`SELECT DISTINCT package_name FROM read_parquet('${fuPath.replace(/'/g, "''")}') WHERE is_latest = true`),
+  ]);
+
+  const allPackageNames = [
+    ...componentRows.map(r => r.package_name),
+    ...functionRows.map(r => r.package_name),
+  ];
+
+  for (const name of allPackageNames) {
+    assert.ok(
+      !name.startsWith('.') && !name.startsWith('/') && !name.startsWith('@/') && !name.startsWith('~/'),
+      `Internal import path found in usages: "${name}" — should have been filtered out`,
+    );
+  }
+});
+
+test('subpath external imports (@acme/ui/icons) are captured', async () => {
+  const { queryParquet, requireParquet } = require('../dist/parquet-query');
+  const cuPath = requireParquet('component_usages');
+  const rows = await queryParquet(
+    `SELECT DISTINCT package_name FROM read_parquet('${cuPath.replace(/'/g, "''")}') WHERE is_latest = true AND package_name = '@acme/ui/icons'`
+  );
+  assert.ok(rows.length >= 1, `Expected @acme/ui/icons to appear in component_usages, but it was not found`);
+});

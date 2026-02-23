@@ -448,3 +448,80 @@ const x = new MyClass('arg1', 42);
   assert.equal(functionCalls[0].args[0].value, 'arg1');
   assert.equal(functionCalls[0].args[1].value, 42);
 });
+
+// ─── Internal import filtering ────────────────────────────────────────────────
+
+test('relative import (./foo) is not included in imports[]', async () => {
+  const { imports } = await extract("import { foo } from './utils';");
+  assert.equal(imports.length, 0);
+});
+
+test('parent-relative import (../foo) is not included in imports[]', async () => {
+  const { imports } = await extract("import { bar } from '../lib/helpers';");
+  assert.equal(imports.length, 0);
+});
+
+test('@/ aliased import is not included in imports[]', async () => {
+  const { imports } = await extract("import { api } from '@/services/api';");
+  assert.equal(imports.length, 0);
+});
+
+test('~/ aliased import is not included in imports[]', async () => {
+  const { imports } = await extract("import { cfg } from '~/config';");
+  assert.equal(imports.length, 0);
+});
+
+test('absolute path import is not included in imports[]', async () => {
+  const { imports } = await extract("import { x } from '/absolute/path';");
+  assert.equal(imports.length, 0);
+});
+
+test('bare package import is included in imports[]', async () => {
+  const { imports } = await extract("import { useState } from 'react';");
+  assert.equal(imports.length, 1);
+  assert.equal(imports[0].source, 'react');
+});
+
+test('scoped package import is included in imports[]', async () => {
+  const { imports } = await extract("import { Button } from '@acme/ui';");
+  assert.equal(imports.length, 1);
+  assert.equal(imports[0].source, '@acme/ui');
+});
+
+test('subpath import from external package is included in imports[]', async () => {
+  const { imports } = await extract("import { Icon } from '@acme/ui/icons';");
+  assert.equal(imports.length, 1);
+  assert.equal(imports[0].source, '@acme/ui/icons');
+});
+
+test('relative import does not produce component usage even with empty targetPackages', async () => {
+  const src = `
+    import { LocalBtn } from './components/Button';
+    const el = <LocalBtn variant="primary" />;
+  `;
+  const { componentUsages, imports } = await extract(src, [], true);
+  assert.equal(imports.length, 0, 'internal import should not appear in imports');
+  assert.equal(componentUsages.length, 0, 'local component should not be tracked');
+});
+
+test('@/ aliased import does not produce function call usage even with empty targetPackages', async () => {
+  const src = `
+    import { fetchUser } from '@/api/users';
+    fetchUser('123');
+  `;
+  const { functionCalls, imports } = await extract(src, []);
+  assert.equal(imports.length, 0, 'aliased import should not appear in imports');
+  assert.equal(functionCalls.length, 0, 'aliased function should not be tracked');
+});
+
+test('mix of internal and external imports: only external appear in imports[]', async () => {
+  const src = `
+    import { Button } from '@acme/ui';
+    import { helper } from './utils';
+    import { api } from '@/services/api';
+    import { formatDate } from '@acme/utils';
+  `;
+  const { imports } = await extract(src);
+  assert.equal(imports.length, 2);
+  assert.deepEqual(imports.map(i => i.source).sort(), ['@acme/ui', '@acme/utils']);
+});

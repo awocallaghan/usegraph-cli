@@ -63,6 +63,7 @@ export function extractFromAst(
 
     const importSource = getStringValue(node['source']);
     if (!importSource) return;
+    if (!isExternalImport(importSource)) return; // skip internal/aliased paths
 
     const typeOnly = !!(node['typeOnly'] as boolean);
     const specifierNodes = (node['specifiers'] as AstNode[]) ?? [];
@@ -226,6 +227,19 @@ function isTargetPackage(source: string, targets: Set<string>): boolean {
     if (source === target || source.startsWith(target + '/')) return true;
   }
   return false;
+}
+
+/**
+ * Returns true if the import source is an external package (npm dependency or
+ * subpath import), false if it is an internal module (relative path, absolute
+ * path, or a common path alias like @/ or ~/).
+ */
+function isExternalImport(source: string): boolean {
+  if (source.startsWith('.')) return false;  // relative: ./foo  ../bar
+  if (source.startsWith('/')) return false;  // absolute path
+  if (source.startsWith('@/')) return false; // @/ alias (e.g. Next.js, Vite)
+  if (source.startsWith('~/')) return false; // ~/ alias
+  return true;
 }
 
 function getStringValue(node: unknown): string | undefined {
