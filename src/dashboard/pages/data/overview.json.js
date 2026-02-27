@@ -35,9 +35,16 @@ function p(filename) {
 }
 
 // Core queries — project_snapshots.parquet is guaranteed to exist at this point.
+// Check schema first for backward compat with Parquet files built before code_at was added.
+const snapshotSchema = await queryParquet(
+  `DESCRIBE SELECT * FROM ${p('project_snapshots.parquet')}`,
+);
+const snapshotHasCodeAt = snapshotSchema.some(c => c.column_name === 'code_at');
+const codeAtExpr = snapshotHasCodeAt ? 'code_at' : 'NULL::VARCHAR AS code_at';
+
 const [projects, frameworkCounts, buildToolCounts, pmCounts] = await Promise.all([
   queryParquet(
-    `SELECT project_id, scanned_at, code_at, framework, build_tool, package_manager
+    `SELECT project_id, scanned_at, ${codeAtExpr}, framework, build_tool, package_manager
      FROM ${p('project_snapshots.parquet')}
      WHERE is_latest = true
      ORDER BY scanned_at DESC`,
