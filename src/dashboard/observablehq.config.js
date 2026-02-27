@@ -4,5 +4,6 @@ export default {
   pages: [
     { name: "Overview", path: "/" },
     { name: "Dependencies", path: "/dependencies" },
+    { name: "Package Adoption", path: "/package-adoption" },
   ],
 };
