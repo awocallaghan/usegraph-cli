@@ -31,7 +31,7 @@ import { chromium } from 'playwright';
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const ROOT = resolve(__dirname, '..');
 const DIST_CLI = resolve(ROOT, 'dist', 'index.js');
-const DIST_DASHBOARD = resolve(ROOT, 'dist');
+const DIST_DASHBOARD = resolve(ROOT, 'src', 'dashboard', 'dist');
 
 const FIXTURES_ROOT = resolve(__dirname, 'fixtures/org');
 const FIXTURE_PROJECTS = [
@@ -71,8 +71,7 @@ let browser;
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 before(async () => {
-  // 1. Compile TypeScript CLI (needed for scan + build steps; must run before observable build
-  //    which wipes dist/)
+  // 1. Compile TypeScript CLI (needed for scan + build steps)
   const tscResult = spawnSync(
     'npx', ['tsc'],
     { encoding: 'utf-8', timeout: 60_000, cwd: ROOT },
@@ -103,10 +102,12 @@ before(async () => {
     throw new Error(`usegraph build failed:\n${(buildResult.stderr || buildResult.stdout || '').slice(0, 500)}`);
   }
 
-  // 4. Build Observable Framework dashboard (runs last — it wipes dist/ clean)
+  // 4. Build Observable Framework dashboard into src/dashboard/dist/
+  //    Run from src/dashboard/ so that observablehq.config.js is picked up and
+  //    the output stays in src/dashboard/dist/ (not the package root dist/).
   const obsBuild = spawnSync(
-    'npx', ['observable', 'build', '--root', 'src/dashboard/pages'],
-    { env: { ...process.env, USEGRAPH_HOME }, encoding: 'utf-8', timeout: 120_000, cwd: ROOT },
+    'npx', ['observable', 'build'],
+    { env: { ...process.env, USEGRAPH_HOME }, encoding: 'utf-8', timeout: 120_000, cwd: resolve(ROOT, 'src', 'dashboard') },
   );
   if (obsBuild.status !== 0) {
     throw new Error(`Observable build failed:\n${obsBuild.stderr}\n${obsBuild.stdout}`);
