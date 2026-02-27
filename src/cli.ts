@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 import { runScan } from './commands/scan.js';
 import { runView } from './commands/view.js';
-import { runServe } from './commands/serve.js';
+import { runDashboard } from './commands/dashboard.js';
 import { runBuild } from './commands/build.js';
 import { runMcp } from './commands/mcp.js';
 import { loadConfig, writeDefaultConfig } from './config.js';
@@ -75,19 +75,20 @@ export function createCli(): Command {
       }
     });
 
-  // ── serve ─────────────────────────────────────────────────────────────────
+  // ── dashboard ─────────────────────────────────────────────────────────────
   program
-    .command('serve [paths...]')
-    .description('Launch a local web dashboard to visualise scan results in the browser')
+    .command('dashboard')
+    .description(
+      'Launch the usegraph web dashboard (requires `usegraph build` to have been run first)',
+    )
     .option('-p, --port <n>', 'Port to listen on (default: 3000)')
     .option('--open', 'Open the dashboard in the default browser automatically')
-    .option('-o, --output <dir>', 'Scan output dir within each project (default: ~/.usegraph/<slug>)')
-    .action(async (paths: string[], opts) => {
+    .action(async (opts) => {
       try {
-        await runServe(paths, opts);
+        await runDashboard(opts);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(chalk.red(`Unexpected error: ${message}`));
+        console.error(chalk.red(`Dashboard error: ${message}`));
         process.exit(1);
       }
     });

@@ -28,6 +28,7 @@
     "tsx": "^4.19.0"
   },
   "dependencies": {
+    "@observablehq/framework": "^1.13.0",
     "@swc/core": "^1.10.0",
     "@tmcp/adapter-zod": "^0.1.7",
     "@tmcp/transport-stdio": "^0.4.1",
