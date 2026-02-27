@@ -13,6 +13,13 @@ import { copyFileSync } from 'fs';
 import { join } from 'path';
 import type { ScanResult, FileAnalysis } from './types.js';
 
+/**
+ * Save a scan result to disk. The scan is stored as `<outputDir>/scans/<result.id>.json`.
+ *
+ * When `result.id` is a commit SHA (set by scanProject when git is available),
+ * calling save twice for the same commit will overwrite the previous result for
+ * that commit — this is intentional and enables idempotent history scanning.
+ */
 export function saveScanResult(outputDir: string, result: ScanResult): string {
   const scansDir = join(outputDir, 'scans');
   mkdirSync(scansDir, { recursive: true });
@@ -48,7 +55,7 @@ export function loadScanResult(outputDir: string, scanId: string): ScanResult | 
   }
 }
 
-/** List all saved scan IDs (newest first) */
+/** List all saved scan IDs. Returns IDs in undefined order when IDs are commit SHAs. */
 export function listScans(outputDir: string): string[] {
   const scansDir = join(outputDir, 'scans');
   if (!existsSync(scansDir)) return [];
@@ -56,6 +63,16 @@ export function listScans(outputDir: string): string[] {
     .filter((f) => f.endsWith('.json'))
     .map((f) => f.replace('.json', ''))
     .reverse();
+}
+
+/**
+ * Check whether a scan for the given commit SHA already exists on disk.
+ * Returns the SHA (which is also the scan ID) if found, null otherwise.
+ * This allows callers to skip re-scanning a commit that was already scanned.
+ */
+export function getScanIdForCommit(outputDir: string, commitSha: string): string | null {
+  const filePath = join(outputDir, 'scans', `${commitSha}.json`);
+  return existsSync(filePath) ? commitSha : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

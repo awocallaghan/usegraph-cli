@@ -43,6 +43,8 @@ export function createCli(): Command {
     .option('-o, --output <dir>', 'Output directory for results (default: ~/.usegraph/<slug>)')
     .option('--concurrency <n>', 'Number of files to analyse in parallel (default: 8)')
     .option('--json', 'Print raw JSON result to stdout instead of saving')
+    .option('--force', 'Re-scan even if this commit was already scanned')
+    .option('--history [n]', 'Scan the last N commits of git history (default: 10)')
     .action(async (path: string | undefined, opts) => {
       try {
         await runScan(path, opts);

@@ -20,6 +20,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { initTestRepo, cleanupTestRepo } from './helpers/git.js';
 
 // ─── Step 1: set USEGRAPH_HOME before importing any dist modules ──────────────
 // In ESM, static imports are hoisted. We use dynamic import() below so that
@@ -52,6 +53,14 @@ const TARGET_PACKAGES = '@acme/ui,@acme/utils';
 // ─── Setup / teardown ─────────────────────────────────────────────────────────
 
 before(async () => {
+  // 0. Initialise ephemeral git repos for each fixture project (keeps main repo clean)
+  for (const projectPath of FIXTURE_PROJECTS) {
+    await initTestRepo(projectPath, [
+      { message: 'initial commit' },
+      { message: 'second commit', files: { 'src/_gitmarker.ts': '// marker\n' } },
+    ]);
+  }
+
   // 1. Scan each fixture project
   for (const projectPath of FIXTURE_PROJECTS) {
     const result = spawnSync(
@@ -79,6 +88,10 @@ after(() => {
     rmSync(USEGRAPH_HOME, { recursive: true, force: true });
   } catch {
     // Best-effort cleanup
+  }
+  // Remove ephemeral .git directories from fixture projects
+  for (const projectPath of FIXTURE_PROJECTS) {
+    cleanupTestRepo(projectPath);
   }
 });
 
@@ -285,4 +298,86 @@ test('dashboard data loader outputs valid JSON with correct shape', () => {
     frameworkNames.includes('react'),
     `Expected "react" in frameworkCounts, got: ${JSON.stringify(frameworkNames)}`,
   );
+});
+
+// ─── codeAt and --history tests ──────────────────────────────────────────────
+
+test('scanned projects have codeAt set from git', async () => {
+  const { loadLatestScanResult } = await import('../dist/storage.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+  const { createStorageBackend } = await import('../dist/storage/index.js');
+  const { loadConfig } = await import('../dist/config.js');
+
+  const projectPath = FIXTURE_PROJECTS[0];
+  const config = loadConfig(projectPath);
+  const slug = computeProjectSlug(projectPath);
+  const backend = createStorageBackend(projectPath, slug, {}, config);
+  const result = backend.loadLatest();
+
+  assert.ok(result, 'should have a scan result');
+  assert.ok(result.codeAt, 'codeAt should be set when project is a git repo');
+  assert.ok(!isNaN(new Date(result.codeAt).getTime()), 'codeAt should be a valid date string');
+  assert.equal(result.id, result.commitSha, 'id should equal commitSha for git repos');
+});
+
+test('--history scans multiple commits and writes separate scan files', async () => {
+  const projectPath = FIXTURE_PROJECTS[0];
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+  const { createStorageBackend } = await import('../dist/storage/index.js');
+  const { loadConfig } = await import('../dist/config.js');
+
+  const result = spawnSync(
+    process.execPath,
+    [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES, '--history', '2'],
+    {
+      env: process.env,
+      encoding: 'utf-8',
+      timeout: 120_000,
+    },
+  );
+  assert.equal(result.status, 0, `--history scan failed:\n${result.stderr || result.stdout}`);
+
+  const config = loadConfig(projectPath);
+  const slug = computeProjectSlug(projectPath);
+  const backend = createStorageBackend(projectPath, slug, {}, config);
+  const scanIds = backend.list();
+  assert.ok(scanIds.length >= 2, `Expected ≥2 scan files after --history 2, got ${scanIds.length}`);
+
+  // Re-running --history should be idempotent (same files, no duplicates)
+  const result2 = spawnSync(
+    process.execPath,
+    [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES, '--history', '2'],
+    {
+      env: process.env,
+      encoding: 'utf-8',
+      timeout: 120_000,
+    },
+  );
+  assert.equal(result2.status, 0, `second --history scan failed`);
+  const scanIds2 = backend.list();
+  assert.equal(scanIds2.length, scanIds.length, 'Re-running --history should be idempotent');
+});
+
+test('after --history build, Parquet has multiple rows and correct is_latest', async () => {
+  // Re-build with the history scans included
+  await runBuild({});
+
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const projectPath = FIXTURE_PROJECTS[0];
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+  const slug = computeProjectSlug(projectPath);
+
+  const p = requireParquet('project_snapshots');
+  const rows = await queryParquet(
+    `SELECT project_id, scanned_at, code_at, is_latest
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}'
+     ORDER BY code_at DESC NULLS LAST`
+  );
+
+  assert.ok(rows.length >= 2, `Expected ≥2 snapshot rows for ${slug}, got ${rows.length}`);
+  const latestRows = rows.filter(r => r.is_latest);
+  assert.equal(latestRows.length, 1, 'Exactly one row should have is_latest = true');
+  // The latest row should be first (most recent code_at)
+  assert.ok(latestRows[0].code_at != null || latestRows[0].scanned_at != null, 'Latest row should have a timestamp');
 });

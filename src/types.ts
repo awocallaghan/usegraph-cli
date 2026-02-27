@@ -149,6 +149,10 @@ export interface ScanResult {
   meta?: ProjectMeta;
   /** Number of files loaded from the incremental cache (0 when cache disabled or cold) */
   cacheHits?: number;
+  /** ISO timestamp of the git commit being scanned; null when not in git or no commits */
+  codeAt: string | null;
+  /** When true, this scan was produced by walking git history (not the working tree) */
+  isHistoricalScan?: boolean;
 }
 
 // --------------------------------------------------------------------------
