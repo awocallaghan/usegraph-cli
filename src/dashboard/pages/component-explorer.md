@@ -4,6 +4,8 @@ title: Component Explorer
 
 # Component Explorer
 
+<div id="comp-loading-indicator" style="display:flex;align-items:center;gap:10px;padding:1.25rem 0;color:var(--theme-foreground-muted)"><div style="flex-shrink:0;width:18px;height:18px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite"></div>Loading usage data…<style>@keyframes spin{to{transform:rotate(360deg)}}</style></div>
+
 ```js
 // Load both parquet tables via DuckDB WASM
 const db = await DuckDBClient.of({
@@ -17,6 +19,14 @@ const db = await DuckDBClient.of({
 const allPackages = await db.query(
   `SELECT DISTINCT package_name FROM component_usages WHERE is_latest = true ORDER BY package_name`
 ).then(r => Array.from(r).map(d => d.package_name));
+```
+
+```js
+// Remove loading indicator once data is ready
+{
+  void allPackages;
+  document.getElementById("comp-loading-indicator")?.remove();
+}
 ```
 
 ```js
@@ -109,7 +119,8 @@ const selectedPropFilter = view(
 ```
 
 ```js
-// value_type filter
+// value_type filter — only shown once data has loaded
+void allPackages;
 const valueTypeFilter = view(
   Inputs.select(["All", "static", "dynamic"], { label: "Value type" })
 );
