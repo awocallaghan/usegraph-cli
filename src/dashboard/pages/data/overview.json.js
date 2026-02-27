@@ -1,18 +1,25 @@
 /**
  * Observable Framework data loader: overview.json.js
  *
- * Runs as a Node.js child process on demand. Queries Parquet tables produced
- * by `usegraph build` via DuckDB and writes JSON to stdout.
+ * Queries ~/.usegraph/built/*.parquet via the shared queryParquet helper
+ * (which handles DuckDB connection management and BigInt sanitization) and
+ * writes a JSON summary to stdout.
  *
- * USEGRAPH_HOME env var is set by `usegraph dashboard` to point at ~/.usegraph.
+ * USEGRAPH_HOME env var is forwarded by `usegraph dashboard`.
  */
-import duckdb from 'duckdb';
-import { join } from 'path';
-import { homedir } from 'os';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 
-const usegraphHome = process.env.USEGRAPH_HOME ?? join(homedir(), '.usegraph');
-const builtDir = join(usegraphHome, 'built');
+// Import the compiled shared helper from the CLI's dist/ directory.
+// Resolving via import.meta.url keeps this correct regardless of cwd.
+// Path: src/dashboard/pages/data/ → (4 levels up) → dist/parquet-query.js
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const { queryParquet, getBuiltDir } = await import(
+  join(__dirname, '../../../../dist/parquet-query.js')
+);
+
+const builtDir = getBuiltDir();
 const snapshotFile = join(builtDir, 'project_snapshots.parquet');
 
 if (!existsSync(snapshotFile)) {
@@ -22,54 +29,32 @@ if (!existsSync(snapshotFile)) {
   process.exit(1);
 }
 
-// Open an in-memory DuckDB instance
-const db = await new Promise((resolve, reject) => {
-  const inst = new duckdb.Database(':memory:', (err) => {
-    if (err) reject(err);
-    else resolve(inst);
-  });
-});
-
-const conn = db.connect();
-
-/** Run a SQL query and return all rows. */
-function query(sql) {
-  return new Promise((resolve, reject) => {
-    conn.all(sql, (err, result) => {
-      if (err) reject(new Error(err.message ?? String(err)));
-      else resolve(result ?? []);
-    });
-  });
-}
-
 /** Return a read_parquet(...) expression for a file in builtDir. */
 function p(filename) {
-  // Escape single quotes in the path (unusual but safe)
-  const safePath = join(builtDir, filename).replace(/'/g, "''");
-  return `read_parquet('${safePath}')`;
+  return `read_parquet('${join(builtDir, filename).replace(/'/g, "''")}')`;
 }
 
-// Always-present queries
+// Core queries — project_snapshots.parquet is guaranteed to exist at this point.
 const [projects, frameworkCounts, buildToolCounts, pmCounts] = await Promise.all([
-  query(
+  queryParquet(
     `SELECT project_id, scanned_at, framework, build_tool, package_manager
      FROM ${p('project_snapshots.parquet')}
      WHERE is_latest = true
      ORDER BY scanned_at DESC`,
   ),
-  query(
+  queryParquet(
     `SELECT framework AS name, COUNT(*) AS count
      FROM ${p('project_snapshots.parquet')}
      WHERE is_latest = true AND framework IS NOT NULL
      GROUP BY framework ORDER BY count DESC`,
   ),
-  query(
+  queryParquet(
     `SELECT build_tool AS name, COUNT(*) AS count
      FROM ${p('project_snapshots.parquet')}
      WHERE is_latest = true AND build_tool IS NOT NULL
      GROUP BY build_tool ORDER BY count DESC`,
   ),
-  query(
+  queryParquet(
     `SELECT package_manager AS name, COUNT(*) AS count
      FROM ${p('project_snapshots.parquet')}
      WHERE is_latest = true AND package_manager IS NOT NULL
@@ -77,34 +62,31 @@ const [projects, frameworkCounts, buildToolCounts, pmCounts] = await Promise.all
   ),
 ]);
 
-// Optional tables (may be absent if there was no data at build time)
+// Optional tables — may be absent when there was no matching data at build time.
 let totalComponentUsages = 0;
 let totalFunctionUsages = 0;
 
 if (existsSync(join(builtDir, 'component_usages.parquet'))) {
-  const rows = await query(
+  const rows = await queryParquet(
     `SELECT COUNT(*)::INTEGER AS n FROM ${p('component_usages.parquet')} WHERE is_latest = true`,
   );
   totalComponentUsages = rows[0]?.n ?? 0;
 }
 
 if (existsSync(join(builtDir, 'function_usages.parquet'))) {
-  const rows = await query(
+  const rows = await queryParquet(
     `SELECT COUNT(*)::INTEGER AS n FROM ${p('function_usages.parquet')} WHERE is_latest = true`,
   );
   totalFunctionUsages = rows[0]?.n ?? 0;
 }
 
-conn.close();
-await new Promise((resolve) => db.close(() => resolve()));
-
-const output = {
-  projects,
-  totalComponentUsages,
-  totalFunctionUsages,
-  frameworkCounts,
-  buildToolCounts,
-  packageManagerCounts: pmCounts,
-};
-
-process.stdout.write(JSON.stringify(output));
+process.stdout.write(
+  JSON.stringify({
+    projects,
+    totalComponentUsages,
+    totalFunctionUsages,
+    frameworkCounts,
+    buildToolCounts,
+    packageManagerCounts: pmCounts,
+  }),
+);

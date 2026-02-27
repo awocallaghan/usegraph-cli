@@ -230,3 +230,59 @@ test('subpath external imports (@acme/ui/icons) are captured', async () => {
   );
   assert.ok(rows.length >= 1, `Expected @acme/ui/icons to appear in component_usages, but it was not found`);
 });
+
+// ─── Dashboard data loader ────────────────────────────────────────────────────
+
+test('dashboard data loader outputs valid JSON with correct shape', () => {
+  const loaderPath = resolve(__dirname, '..', 'src', 'dashboard', 'pages', 'data', 'overview.json.js');
+
+  const result = spawnSync(process.execPath, [loaderPath], {
+    env: { ...process.env, USEGRAPH_HOME },
+    encoding: 'utf-8',
+    timeout: 30_000,
+  });
+
+  assert.equal(
+    result.status,
+    0,
+    `Data loader exited with code ${result.status}.\nstderr: ${result.stderr}`,
+  );
+
+  let parsed;
+  assert.doesNotThrow(
+    () => { parsed = JSON.parse(result.stdout); },
+    `Data loader stdout is not valid JSON.\nstdout: ${result.stdout.slice(0, 300)}`,
+  );
+
+  // Shape
+  assert.ok(Array.isArray(parsed.projects), 'projects should be an array');
+  assert.strictEqual(typeof parsed.totalComponentUsages, 'number', 'totalComponentUsages should be a number');
+  assert.strictEqual(typeof parsed.totalFunctionUsages, 'number', 'totalFunctionUsages should be a number');
+  assert.ok(Array.isArray(parsed.frameworkCounts), 'frameworkCounts should be an array');
+  assert.ok(Array.isArray(parsed.buildToolCounts), 'buildToolCounts should be an array');
+  assert.ok(Array.isArray(parsed.packageManagerCounts), 'packageManagerCounts should be an array');
+
+  // Data correctness
+  assert.equal(parsed.projects.length, 6, `Expected 6 projects, got ${parsed.projects.length}`);
+  assert.ok(parsed.totalComponentUsages > 0, 'totalComponentUsages should be > 0');
+  assert.ok(parsed.totalFunctionUsages > 0, 'totalFunctionUsages should be > 0');
+
+  // No BigInt values — JSON.stringify would have thrown during serialization
+  // Verify count fields are plain numbers, not bigints
+  for (const row of parsed.frameworkCounts) {
+    assert.strictEqual(typeof row.count, 'number', `frameworkCounts[].count must be number, got ${typeof row.count}`);
+  }
+  for (const row of parsed.buildToolCounts) {
+    assert.strictEqual(typeof row.count, 'number', `buildToolCounts[].count must be number, got ${typeof row.count}`);
+  }
+  for (const row of parsed.packageManagerCounts) {
+    assert.strictEqual(typeof row.count, 'number', `packageManagerCounts[].count must be number, got ${typeof row.count}`);
+  }
+
+  // Framework distribution should include react (used by 4 of 6 fixtures)
+  const frameworkNames = parsed.frameworkCounts.map((r) => r.name);
+  assert.ok(
+    frameworkNames.includes('react'),
+    `Expected "react" in frameworkCounts, got: ${JSON.stringify(frameworkNames)}`,
+  );
+});
