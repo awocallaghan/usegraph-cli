@@ -3,5 +3,6 @@ export default {
   root: "pages",
   pages: [
     { name: "Overview", path: "/" },
+    { name: "Dependencies", path: "/dependencies" },
   ],
 };
