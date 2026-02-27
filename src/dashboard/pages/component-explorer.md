@@ -56,17 +56,55 @@ const selectedComponent = (urlComponent && allComponents.includes(urlComponent))
 ```
 
 ```js
-// Optional project filter (URL param or text input)
+// Projects that use the selected component (resets when component changes)
+const allProjects = (selectedPackage && selectedComponent)
+  ? await db.query(
+      `SELECT DISTINCT project_id
+       FROM component_usages
+       WHERE is_latest = true
+         AND package_name    = '${(selectedPackage).replace(/'/g, "''")}'
+         AND component_name  = '${(selectedComponent).replace(/'/g, "''")}'
+       ORDER BY project_id`
+    ).then(r => Array.from(r).map(d => d.project_id))
+  : [];
+```
+
+```js
+// Resolve selected project: URL param → dropdown fallback
 const urlProject = new URLSearchParams(location.search).get("project");
-const projectFilter = view(
-  Inputs.text({ label: "Project filter", placeholder: "All projects", value: urlProject ?? "" })
+const selectedProjectFilter = view(
+  allProjects.length > 0
+    ? Inputs.select(
+        ["All", ...allProjects],
+        {
+          label: "Project",
+          value: (urlProject && allProjects.includes(urlProject)) ? urlProject : "All",
+        }
+      )
+    : Inputs.text({ label: "Project", placeholder: "Select a component first", disabled: true })
 );
 ```
 
 ```js
-// Prop name search filter
-const propNameFilter = view(
-  Inputs.text({ label: "Prop name", placeholder: "e.g. variant, size, …" })
+// Prop names recorded for the selected component (resets when component changes)
+const allProps = (selectedPackage && selectedComponent)
+  ? await db.query(
+      `SELECT DISTINCT prop_name
+       FROM component_prop_usages
+       WHERE is_latest = true
+         AND package_name   = '${(selectedPackage).replace(/'/g, "''")}'
+         AND component_name = '${(selectedComponent).replace(/'/g, "''")}'
+       ORDER BY prop_name`
+    ).then(r => Array.from(r).map(d => d.prop_name))
+  : [];
+```
+
+```js
+// Prop name dropdown (resets when component changes)
+const selectedPropFilter = view(
+  allProps.length > 0
+    ? Inputs.select(["All", ...allProps], { label: "Prop name" })
+    : Inputs.text({ label: "Prop name", placeholder: "Select a component first", disabled: true })
 );
 ```
 
@@ -81,8 +119,8 @@ const valueTypeFilter = view(
 // Build reusable WHERE clause fragments (safe-escaped)
 const safePkg  = (selectedPackage  ?? "").replace(/'/g, "''");
 const safeCmp  = (selectedComponent ?? "").replace(/'/g, "''");
-const safeProj = projectFilter.trim().replace(/'/g, "''");
-const safeProp = propNameFilter.trim().replace(/'/g, "''");
+const safeProj = (selectedProjectFilter !== "All" ? selectedProjectFilter : "").replace(/'/g, "''");
+const safeProp = (selectedPropFilter    !== "All" ? selectedPropFilter    : "").replace(/'/g, "''");
 
 const baseWhere = [
   `is_latest = true`,
@@ -93,7 +131,7 @@ const baseWhere = [
 
 const propWhere = [
   baseWhere,
-  safeProp                        ? `prop_name ILIKE '%${safeProp}%'`   : null,
+  safeProp                        ? `prop_name = '${safeProp}'`          : null,
   valueTypeFilter !== "All"       ? `value_type = '${valueTypeFilter}'` : null,
 ].filter(Boolean).join(" AND ");
 ```
@@ -202,7 +240,7 @@ if (!hasSelection) {
 
 ```js
 if (hasSelection && propFreqRows.length === 0) {
-  display(html`<p style="color:var(--theme-foreground-muted)">No prop usage data found${safeProp ? ` matching "${propNameFilter}"` : ""}.</p>`);
+  display(html`<p style="color:var(--theme-foreground-muted)">No prop usage data found${safeProp ? ` for prop "${selectedPropFilter}"` : ""}.</p>`);
 } else if (hasSelection) {
   display(Plot.plot({
     marginLeft: 160,
@@ -322,7 +360,7 @@ if (!hasSelection) {
 if (!hasSelection || !safeProj) {
   // nothing shown — hint is in the paragraph above
 } else if (fileRows.length === 0) {
-  display(html`<p style="color:var(--theme-foreground-muted)">No files found for <strong>${projectFilter}</strong> with the current filters.</p>`);
+  display(html`<p style="color:var(--theme-foreground-muted)">No files found for <strong>${selectedProjectFilter}</strong> with the current filters.</p>`);
 } else {
   display(Inputs.table(fileRows, {
     columns: ["file_path", "line", "prop_name", "value_type", "value"],
