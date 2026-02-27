@@ -283,5 +283,8 @@ nonAdopters.length === 0
   : Inputs.table(nonAdopters, {
       columns: ["project_id"],
       header: { project_id: "Project" },
+      format: {
+        project_id: (d) => html`<a href="/project-detail?project=${encodeURIComponent(d)}">${d}</a>`,
+      },
     })
 ```
