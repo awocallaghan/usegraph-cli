@@ -2,9 +2,10 @@
 /**
  * dev-dashboard.js — quickly spin up the dashboard with fixture data
  *
- * Does exactly what the e2e test does, but persistently:
- *   1. Ensures each fixture project has an ephemeral git repo (2 commits)
- *   2. Scans all 6 projects with --history 2 (skips already-scanned commits)
+ * Copies the 6 fixture projects into .dev-usegraph/fixtures/ (leaving the
+ * originals untouched so e2e tests are never affected), then:
+ *   1. Inits an ephemeral git repo with 2 commits in each copy
+ *   2. Scans all 6 copies with --history 2 (skips already-scanned commits)
  *   3. Runs `usegraph build`
  *   4. Launches `usegraph dashboard`
  *
@@ -19,15 +20,16 @@
  */
 
 import { spawnSync, spawn } from 'node:child_process';
-import { existsSync, rmSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { existsSync, rmSync, mkdirSync, cpSync } from 'node:fs';
+import { join, resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
 
 const FIXTURES_ROOT = join(REPO_ROOT, 'tests', 'fixtures', 'org');
-const FIXTURE_PROJECTS = [
+// Source fixture paths (never modified)
+const SOURCE_PROJECTS = [
   join(FIXTURES_ROOT, 'apps', 'web-app'),
   join(FIXTURES_ROOT, 'apps', 'dashboard'),
   join(FIXTURES_ROOT, 'apps', 'docs'),
@@ -36,8 +38,9 @@ const FIXTURE_PROJECTS = [
   join(FIXTURES_ROOT, 'packages', 'utils'),
 ];
 
-const DEV_STORE = join(REPO_ROOT, '.dev-usegraph');
-const DIST_CLI  = join(REPO_ROOT, 'dist', 'index.js');
+const DEV_STORE   = join(REPO_ROOT, '.dev-usegraph');
+const DEV_FIXTURES = join(DEV_STORE, 'fixtures');
+const DIST_CLI    = join(REPO_ROOT, 'dist', 'index.js');
 const TARGET_PACKAGES = '@acme/ui,@acme/utils';
 
 const args = process.argv.slice(2);
@@ -80,41 +83,53 @@ if (CLEAN) {
   rmSync(DEV_STORE, { recursive: true, force: true });
 }
 
-// ── ensure each fixture has a git repo with 2 commits ────────────────────────
+// ── copy fixtures into .dev-usegraph/fixtures/ and init git repos ─────────────
 
 if (!BUILD_ONLY) {
-  console.log('\n── Setting up fixture git repos ──────────────────────────────');
-  for (const projectPath of FIXTURE_PROJECTS) {
-    const shortName = projectPath.split('/').slice(-2).join('/');
-    const gitDir = join(projectPath, '.git');
+  console.log('\n── Setting up fixture copies (originals untouched) ───────────');
 
-    if (existsSync(gitDir)) {
-      const log = git(projectPath, ['log', '--oneline']).stdout.trim().split('\n').filter(Boolean);
-      console.log(`  ${shortName}: ${log.length} commit(s) already present`);
+  for (const srcPath of SOURCE_PROJECTS) {
+    const subdir  = srcPath.includes('/apps/')      ? 'apps'     : 'packages';
+    const name    = basename(srcPath);
+    const destPath = join(DEV_FIXTURES, subdir, name);
+    const shortName = `${subdir}/${name}`;
+
+    if (existsSync(join(destPath, '.git'))) {
+      const log = git(destPath, ['log', '--oneline']).stdout.trim().split('\n').filter(Boolean);
+      console.log(`  ${shortName}: ${log.length} commit(s) already present in copy`);
       continue;
     }
 
-    process.stdout.write(`  ${shortName}: initialising git repo … `);
-    git(projectPath, ['init']);
-    git(projectPath, ['config', 'user.email', 'dev@dev.local']);
-    git(projectPath, ['config', 'user.name', 'Dev']);
-    git(projectPath, ['add', '.']);
-    git(projectPath, ['commit', '-m', 'initial commit', '--allow-empty']);
-    // Second commit so --history 2 has 2 distinct SHAs to scan
-    git(projectPath, ['commit', '-m', 'second commit', '--allow-empty']);
-    const sha = git(projectPath, ['rev-parse', '--short', 'HEAD']).stdout.trim();
+    process.stdout.write(`  ${shortName}: copying + initialising git repo … `);
+
+    // Copy source files (no .git in source, so this is always clean)
+    mkdirSync(destPath, { recursive: true });
+    cpSync(srcPath, destPath, { recursive: true });
+
+    // Init git with 2 commits
+    git(destPath, ['init']);
+    git(destPath, ['config', 'user.email', 'dev@dev.local']);
+    git(destPath, ['config', 'user.name', 'Dev']);
+    git(destPath, ['add', '.']);
+    git(destPath, ['commit', '-m', 'initial commit', '--allow-empty']);
+    git(destPath, ['commit', '-m', 'second commit', '--allow-empty']);
+
+    const sha = git(destPath, ['rev-parse', '--short', 'HEAD']).stdout.trim();
     process.stdout.write(`done (HEAD ${sha})\n`);
   }
 }
 
-// ── scan each fixture project with --history 2 ───────────────────────────────
+// ── scan each fixture copy with --history 2 ───────────────────────────────────
 
 if (!BUILD_ONLY) {
-  console.log('\n── Scanning fixture projects (--history 2) ───────────────────');
-  for (const projectPath of FIXTURE_PROJECTS) {
+  console.log('\n── Scanning fixture copies (--history 2) ─────────────────────');
+
+  for (const srcPath of SOURCE_PROJECTS) {
+    const subdir   = srcPath.includes('/apps/') ? 'apps' : 'packages';
+    const destPath = join(DEV_FIXTURES, subdir, basename(srcPath));
     run(
-      `scan ${projectPath.split('/').slice(-2).join('/')}`,
-      DIST_CLI, 'scan', projectPath,
+      `scan ${subdir}/${basename(srcPath)}`,
+      DIST_CLI, 'scan', destPath,
       '--packages', TARGET_PACKAGES,
       '--history', '2',
     );
@@ -141,3 +156,4 @@ if (!SCAN_ONLY) {
   dashboard.on('exit', (code) => process.exit(code ?? 0));
   process.on('SIGINT', () => dashboard.kill('SIGINT'));
 }
+
