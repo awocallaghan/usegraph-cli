@@ -36,6 +36,9 @@ dist/
 # Scan results (can be re-generated)
 .usegraph/
 
+# Dev dashboard fixture data
+.dev-usegraph/
+
 # Python cache (if using Python projects)
 __pycache__/
 *.pyc
