@@ -55,7 +55,10 @@ async function toolGetScanMetadata(): Promise<unknown> {
       COUNT(DISTINCT project_id)::INTEGER          AS project_count,
       MIN(scanned_at)::VARCHAR                     AS oldest_scan,
       MAX(scanned_at)::VARCHAR                     AS newest_scan,
+      MIN(code_at)::VARCHAR                        AS oldest_code_at,
+      MAX(code_at)::VARCHAR                        AS newest_code_at,
       array_agg(DISTINCT schema_version)           AS schema_versions,
+      -- Staleness uses scanned_at: we want to know when the scan was last *run*
       COUNT(DISTINCT CASE
         WHEN scanned_at::TIMESTAMP < current_timestamp - INTERVAL 7 DAY
         THEN project_id END)::INTEGER              AS stale_project_count
@@ -317,14 +320,14 @@ async function toolQueryComponentAdoptionTrend(args: {
     : '';
   return queryParquet(`
     SELECT
-      date_trunc('month', scanned_at::TIMESTAMP)::VARCHAR AS period,
+      date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::VARCHAR AS period,
       COUNT(DISTINCT project_id)::INTEGER                 AS adopting_projects
     FROM read_parquet('${sqlStr(p)}')
     WHERE (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)
       ${pkgFilter}
       ${compFilter}
-      AND scanned_at::TIMESTAMP >= current_timestamp - INTERVAL ${months} MONTH
-    GROUP BY date_trunc('month', scanned_at::TIMESTAMP)
+      AND COALESCE(code_at, scanned_at)::TIMESTAMP >= current_timestamp - INTERVAL ${months} MONTH
+    GROUP BY date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)
     ORDER BY period
   `);
 }
@@ -383,14 +386,14 @@ async function toolQueryExportAdoptionTrend(args: {
   const expFilter = `AND export_name = '${sqlStr(args.export_name)}'`;
   return queryParquet(`
     SELECT
-      date_trunc('month', scanned_at::TIMESTAMP)::VARCHAR AS period,
+      date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::VARCHAR AS period,
       COUNT(DISTINCT project_id)::INTEGER                 AS adopting_projects
     FROM read_parquet('${sqlStr(p)}')
     WHERE (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)
       ${pkgFilter}
       ${expFilter}
-      AND scanned_at::TIMESTAMP >= current_timestamp - INTERVAL ${months} MONTH
-    GROUP BY date_trunc('month', scanned_at::TIMESTAMP)
+      AND COALESCE(code_at, scanned_at)::TIMESTAMP >= current_timestamp - INTERVAL ${months} MONTH
+    GROUP BY date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)
     ORDER BY period
   `);
 }

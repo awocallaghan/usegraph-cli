@@ -91,16 +91,18 @@ overview.packageManagerCounts.length > 0
 
 ```js
 Inputs.table(overview.projects, {
-  columns: ["project_id", "framework", "build_tool", "package_manager", "scanned_at"],
+  columns: ["project_id", "framework", "build_tool", "package_manager", "code_at", "scanned_at"],
   header: {
     project_id: "Project",
     framework: "Framework",
     build_tool: "Build tool",
     package_manager: "Pkg manager",
+    code_at: "Code state",
     scanned_at: "Last scanned",
   },
   format: {
     project_id: (d) => html`<a href="/project-detail?project=${encodeURIComponent(d)}">${d}</a>`,
+    code_at: (d) => d ? new Date(d).toLocaleString() : "—",
     scanned_at: (d) => new Date(d).toLocaleString(),
   },
 })

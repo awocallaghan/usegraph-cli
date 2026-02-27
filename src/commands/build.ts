@@ -48,6 +48,7 @@ export const BUILT_DIR = join(STORE_ROOT, 'built');
 interface ProjectSnapshotRow {
   project_id: string;
   scanned_at: string;
+  code_at: string | null;
   repo_url: string | null;
   branch: string | null;
   commit_sha: string | null;
@@ -70,6 +71,7 @@ interface ProjectSnapshotRow {
 interface DependencyRow {
   project_id: string;
   scanned_at: string;
+  code_at: string | null;
   is_latest: boolean;
   package_name: string;
   version_range: string;
@@ -86,6 +88,7 @@ interface DependencyRow {
 interface ComponentUsageRow {
   project_id: string;
   scanned_at: string;
+  code_at: string | null;
   is_latest: boolean;
   package_name: string;
   package_version_resolved: string | null;
@@ -109,6 +112,7 @@ interface ComponentPropUsageRow extends ComponentUsageRow {
 interface FunctionUsageRow {
   project_id: string;
   scanned_at: string;
+  code_at: string | null;
   is_latest: boolean;
   package_name: string;
   package_version_resolved: string | null;
@@ -255,19 +259,22 @@ function discoverScanFiles(storeRoot: string): string[] {
 // ─── is_latest computation ────────────────────────────────────────────────────
 
 /**
- * For each projectSlug, identify the scan with the latest scannedAt.
+ * For each projectSlug, identify the scan with the latest codeAt (falling back
+ * to scannedAt for older scans that pre-date codeAt). Historical scans with an
+ * older codeAt correctly appear as older rows even when scanned recently.
  * Returns a Set of scan IDs that are the "latest" for their project.
  */
 function computeLatestIds(scans: ScanResult[]): Set<string> {
   const latestById = new Map<string, string>(); // slug → scanId
-  const latestDate = new Map<string, string>(); // slug → scannedAt
+  const latestDate = new Map<string, string>(); // slug → effectiveDate
 
   for (const scan of scans) {
     const slug = scan.projectSlug ?? scan.projectName ?? scan.id;
+    const effectiveDate = (scan as { codeAt?: string | null }).codeAt ?? scan.scannedAt;
     const existing = latestDate.get(slug);
-    if (!existing || scan.scannedAt > existing) {
+    if (!existing || effectiveDate > existing) {
       latestById.set(slug, scan.id);
-      latestDate.set(slug, scan.scannedAt);
+      latestDate.set(slug, effectiveDate);
     }
   }
 
@@ -287,6 +294,7 @@ function buildAllRows(scans: ScanResult[], latestIds: Set<string>): AllRows {
   for (const scan of scans) {
     const project_id = scan.projectSlug ?? scan.projectName ?? scan.id;
     const scanned_at = scan.scannedAt;
+    const code_at = (scan as { codeAt?: string | null }).codeAt ?? null;
     const is_latest = latestIds.has(scan.id);
     const schema_version = (scan as { schemaVersion?: number }).schemaVersion ?? 0;
     const tooling = scan.meta?.tooling ?? null;
@@ -295,6 +303,7 @@ function buildAllRows(scans: ScanResult[], latestIds: Set<string>): AllRows {
     snapshots.push({
       project_id,
       scanned_at,
+      code_at,
       repo_url: scan.repoUrl ?? null,
       branch: scan.branch ?? null,
       commit_sha: scan.commitSha ?? null,
@@ -320,6 +329,7 @@ function buildAllRows(scans: ScanResult[], latestIds: Set<string>): AllRows {
         deps.push({
           project_id,
           scanned_at,
+          code_at,
           is_latest,
           package_name: dep.name,
           version_range: dep.versionRange,
@@ -341,6 +351,7 @@ function buildAllRows(scans: ScanResult[], latestIds: Set<string>): AllRows {
         const usageBase: ComponentUsageRow = {
           project_id,
           scanned_at,
+          code_at,
           is_latest,
           package_name: usage.importedFrom,
           package_version_resolved: usage.packageVersionResolved ?? null,
@@ -372,6 +383,7 @@ function buildAllRows(scans: ScanResult[], latestIds: Set<string>): AllRows {
         const callBase: FunctionUsageRow = {
           project_id,
           scanned_at,
+          code_at,
           is_latest,
           package_name: call.importedFrom,
           package_version_resolved: call.packageVersionResolved ?? null,

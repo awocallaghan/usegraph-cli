@@ -37,7 +37,7 @@ const safeId = selectedProject.replace(/'/g, "''");
 
 const [allSnapshots, deps, componentUsages, functionUsages, scanHistory] = await Promise.all([
   db.query(
-    `SELECT project_id, scanned_at, is_latest, framework, framework_version, package_manager,
+    `SELECT project_id, scanned_at, code_at, is_latest, framework, framework_version, package_manager,
             build_tool, test_framework, linter, formatter, css_approach,
             typescript, typescript_version, node_version, branch, commit_sha
      FROM project_snapshots WHERE project_id = '${safeId}' ORDER BY scanned_at DESC`
@@ -106,6 +106,7 @@ if (!latestSnapshot) {
 
   const meta2 = [
     ["Last scanned", new Date(latestSnapshot.scanned_at).toLocaleString()],
+    ...(latestSnapshot.code_at ? [["Code state", new Date(latestSnapshot.code_at).toLocaleString()]] : []),
     ["Branch",       latestSnapshot.branch ?? "—"],
     ["Commit",       latestSnapshot.commit_sha ? latestSnapshot.commit_sha.slice(0, 8) : "—"],
     ["Scans stored", allSnapshots.length],

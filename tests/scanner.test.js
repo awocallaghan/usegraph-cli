@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 import { scanProject } from '../dist/analyzer/index.js';
 import { saveScanResult, loadLatestScanResult, loadFileCache } from '../dist/storage.js';
 import { writeDefaultConfig, loadConfig } from '../dist/config.js';
+import { initTestRepo, cleanupTestRepo } from './helpers/git.js';
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -435,6 +436,79 @@ test('writeDefaultConfig creates config with broad include patterns', () => {
       'init config should use ** glob patterns to find files in any directory',
     );
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ─── Git-aware scanning tests ─────────────────────────────────────────────────
+
+test('git-aware scanning: codeAt is null when not in a git repo', async () => {
+  const root = createTempProject();
+  try {
+    const result = await scanProject({
+      projectPath: root,
+      targetPackages: ['@myds/button'],
+      config: makeConfig(),
+    });
+    assert.equal(result.codeAt, null, 'codeAt should be null outside a git repo');
+    assert.equal(result.commitSha, null, 'commitSha should be null outside a git repo');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('git-aware scanning: codeAt is set when in a git repo', async () => {
+  const root = createTempProject();
+  try {
+    await initTestRepo(root);
+    const result = await scanProject({
+      projectPath: root,
+      targetPackages: ['@myds/button'],
+      config: makeConfig(),
+    });
+    assert.ok(result.codeAt, 'codeAt should be set when in a git repo');
+    assert.ok(!isNaN(new Date(result.codeAt).getTime()), 'codeAt should be a valid date');
+  } finally {
+    cleanupTestRepo(root);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('git-aware scanning: id equals commitSha when in a git repo', async () => {
+  const root = createTempProject();
+  try {
+    await initTestRepo(root);
+    const result = await scanProject({
+      projectPath: root,
+      targetPackages: ['@myds/button'],
+      config: makeConfig(),
+    });
+    assert.ok(result.commitSha, 'commitSha should be set when in a git repo');
+    assert.equal(result.id, result.commitSha, 'id should equal commitSha when in a git repo');
+  } finally {
+    cleanupTestRepo(root);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('git-aware scanning: same commit produces same id on re-scan', async () => {
+  const root = createTempProject();
+  try {
+    await initTestRepo(root);
+    const first = await scanProject({
+      projectPath: root,
+      targetPackages: ['@myds/button'],
+      config: makeConfig(),
+    });
+    const second = await scanProject({
+      projectPath: root,
+      targetPackages: ['@myds/button'],
+      config: makeConfig(),
+    });
+    assert.equal(first.id, second.id, 'same commit should produce same id');
+    assert.equal(first.id, first.commitSha, 'id should be the commit SHA');
+  } finally {
+    cleanupTestRepo(root);
     rmSync(root, { recursive: true, force: true });
   }
 });

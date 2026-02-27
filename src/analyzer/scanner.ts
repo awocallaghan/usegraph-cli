@@ -27,6 +27,8 @@ import { randomUUID } from 'crypto';
 /** Progress callback for CLI feedback */
 export type ProgressFn = (done: number, total: number, file: string, cached: boolean) => void;
 
+export { getCommitSha };
+
 export interface ScanOptions {
   projectPath: string;
   targetPackages: string[];
@@ -64,6 +66,10 @@ function getBranch(projectPath: string): string | null {
 
 function getCommitSha(projectPath: string): string | null {
   return gitRaw(projectPath, ['rev-parse', 'HEAD']);
+}
+
+function getCommitTimestamp(projectPath: string): string | null {
+  return gitRaw(projectPath, ['log', '-1', '--format=%cI', 'HEAD']);
 }
 
 function readPackageJson(projectPath: string): Record<string, unknown> | null {
@@ -190,8 +196,9 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
   const resolvedVersions = detectAndParseLockfile(projectPath);
   enrichWithResolvedVersions(results, meta, resolvedVersions);
 
+  const commitSha = getCommitSha(projectPath);
   return {
-    id: randomUUID(),
+    id: commitSha ?? randomUUID(),
     schemaVersion: 1,
     projectPath,
     projectName: basename(projectPath),
@@ -199,7 +206,7 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
     scannedAt: new Date().toISOString(),
     repoUrl: getRepoUrl(projectPath),
     branch: getBranch(projectPath),
-    commitSha: getCommitSha(projectPath),
+    commitSha,
     packageJson: readPackageJson(projectPath),
     targetPackages,
     fileCount: files.length,
@@ -207,6 +214,7 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
     summary,
     meta,
     cacheHits: cache ? cacheHits : undefined,
+    codeAt: getCommitTimestamp(projectPath),
   };
 }
 

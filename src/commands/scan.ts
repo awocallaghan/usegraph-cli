@@ -12,11 +12,17 @@
 import chalk from 'chalk';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { spawnSync } from 'child_process';
 import { loadConfig } from '../config.js';
-import { scanProject } from '../analyzer/index.js';
+import { scanProject, getCommitSha } from '../analyzer/index.js';
 import { computeProjectSlug } from '../analyzer/project-identity.js';
 import { createStorageBackend } from '../storage/index.js';
-import type { ScanResult } from '../types.js';
+import { getScanIdForCommit } from '../storage.js';
+import type { StorageBackend } from '../storage/backend.js';
+import type { ScanResult, UsegraphConfig } from '../types.js';
 
 export interface ScanCommandOptions {
   packages?: string;
@@ -24,6 +30,8 @@ export interface ScanCommandOptions {
   output?: string;
   concurrency?: string;
   json?: boolean;
+  force?: boolean;
+  history?: string | boolean;
 }
 
 export async function runScan(projectPathArg: string | undefined, opts: ScanCommandOptions): Promise<void> {
@@ -52,7 +60,29 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
 
   const projectSlug = computeProjectSlug(projectPath);
   const backend = createStorageBackend(projectPath, projectSlug, opts, config);
-  const cacheDir = backend.getCacheDir();
+  const cacheDir = backend.getCacheDir() ?? '';
+
+  // Check for --history mode
+  if (opts.history !== undefined) {
+    const n = opts.history === true || opts.history === 'true'
+      ? 10
+      : (parseInt(String(opts.history), 10) || 10);
+    await runHistoryScan(projectPath, n, opts, config, targetPackages, backend, cacheDir);
+    return;
+  }
+
+  // Deduplication: skip if this commit was already scanned (unless --force)
+  if (!opts.force && !opts.json && cacheDir) {
+    const commitSha = getCommitSha(projectPath);
+    if (commitSha) {
+      const existingId = getScanIdForCommit(cacheDir, commitSha);
+      if (existingId) {
+        const shortSha = commitSha.slice(0, 7);
+        console.log(chalk.green(`✓ Already scanned commit ${shortSha} — skipping (use --force to re-scan)`));
+        return;
+      }
+    }
+  }
 
   const rawConcurrency = opts.concurrency !== undefined ? Number(opts.concurrency) : 8;
   const concurrency = Number.isFinite(rawConcurrency) && rawConcurrency >= 1
@@ -132,6 +162,10 @@ function printScanSummary(result: ScanResult, elapsedSec: string): void {
   console.log(`  Files with usage:   ${summary.filesWithTargetUsage}`);
   console.log(`  Component usages:   ${summary.totalComponentUsages}`);
   console.log(`  Function calls:     ${summary.totalFunctionCalls}`);
+  if (result.codeAt) {
+    const shortSha = result.commitSha ? ` (commit ${result.commitSha.slice(0, 7)})` : '';
+    console.log(`  Code timestamp:     ${result.codeAt}${shortSha}`);
+  }
 
   if (Object.keys(summary.byPackage).length > 0) {
     console.log('');
@@ -145,4 +179,99 @@ function printScanSummary(result: ScanResult, elapsedSec: string): void {
       );
     }
   }
+}
+
+// ─── History scanning ─────────────────────────────────────────────────────────
+
+function gitRawSync(cwd: string, args: string[]): string | null {
+  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf-8' });
+  if (r.error || r.status !== 0) return null;
+  return r.stdout.trim() || null;
+}
+
+async function runHistoryScan(
+  projectPath: string,
+  n: number,
+  opts: ScanCommandOptions,
+  config: UsegraphConfig,
+  targetPackages: string[],
+  backend: StorageBackend,
+  cacheDir: string,
+): Promise<void> {
+  const projectSlug = computeProjectSlug(projectPath);
+
+  console.log(chalk.bold('usegraph scan --history'));
+  console.log(chalk.dim(`  Project:  ${projectPath}`));
+  console.log(chalk.dim(`  Commits:  ${n}`));
+  console.log('');
+
+  // Get the list of N commit SHAs
+  const logOutput = gitRawSync(projectPath, ['log', '--format=%H', `-n`, String(n)]);
+  if (!logOutput) {
+    console.error(chalk.red('Error: Unable to read git log. Is this a git repository?'));
+    process.exit(1);
+  }
+  const shas = logOutput.split('\n').filter(Boolean);
+  const total = shas.length;
+
+  let scanned = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < shas.length; i++) {
+    const sha = shas[i];
+    const shortSha = sha.slice(0, 7);
+
+    // Skip already-scanned commits unless --force
+    if (!opts.force) {
+      const existingId = getScanIdForCommit(cacheDir, sha);
+      if (existingId) {
+        console.log(chalk.dim(`  [${i + 1}/${total}] Skipping ${shortSha} (already scanned)`));
+        skipped++;
+        continue;
+      }
+    }
+
+    // Get commit date for display
+    const commitDate = gitRawSync(projectPath, ['log', '-1', '--format=%cI', sha]) ?? '';
+    const dateDisplay = commitDate ? ` (${commitDate.slice(0, 10)})` : '';
+    console.log(chalk.dim(`  [${i + 1}/${total}] Scanning commit ${shortSha}${dateDisplay}`));
+
+    // Create a temporary worktree for this commit
+    const tmpDir = mkdtempSync(join(tmpdir(), `usegraph-worktree-`));
+    try {
+      const worktreeResult = spawnSync('git', ['-C', projectPath, 'worktree', 'add', tmpDir, sha], {
+        encoding: 'utf-8',
+      });
+      if (worktreeResult.error || worktreeResult.status !== 0) {
+        console.warn(chalk.yellow(`  Warning: Could not create worktree for ${shortSha}, skipping`));
+        continue;
+      }
+
+      const result: ScanResult = await scanProject({
+        projectPath: tmpDir,
+        targetPackages,
+        config,
+        cacheDir,
+        projectSlug,
+      });
+
+      // Mark as historical scan
+      result.isHistoricalScan = true;
+
+      backend.save(result);
+      scanned++;
+    } finally {
+      // Always clean up the worktree
+      spawnSync('git', ['-C', projectPath, 'worktree', 'remove', tmpDir, '--force'], {
+        encoding: 'utf-8',
+      });
+      try {
+        rmSync(tmpDir, { recursive: true, force: true });
+      } catch { /* ignore */ }
+    }
+  }
+
+  console.log('');
+  console.log(chalk.green(`✓ History scan complete: ${scanned} scanned, ${skipped} skipped`));
+  console.log(chalk.dim(`  Results saved to ${cacheDir}`));
 }
