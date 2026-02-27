@@ -8,6 +8,7 @@
     "usegraph": "dist/index.js"
   },
   "scripts": {
+    "dev:dashboard": "node scripts/dev-dashboard.js",
     "build": "tsc",
     "build:watch": "tsc --watch",
     "dev": "tsx src/index.ts",
