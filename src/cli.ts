@@ -1,20 +1,21 @@
 import { Command } from 'commander';
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import chalk from 'chalk';
-import { runScan } from './commands/scan';
-import { runView } from './commands/view';
-import { runServe } from './commands/serve';
-import { runBuild } from './commands/build';
-import { runMcp } from './commands/mcp';
-import { loadConfig, writeDefaultConfig } from './config';
-import { computeProjectSlug } from './analyzer/project-identity';
-import { createStorageBackend } from './storage/index';
+import { runScan } from './commands/scan.js';
+import { runView } from './commands/view.js';
+import { runServe } from './commands/serve.js';
+import { runBuild } from './commands/build.js';
+import { runMcp } from './commands/mcp.js';
+import { loadConfig, writeDefaultConfig } from './config.js';
+import { computeProjectSlug } from './analyzer/project-identity.js';
+import { createStorageBackend } from './storage/index.js';
 
 function getVersion(): string {
   try {
     const pkg = JSON.parse(
-      readFileSync(join(__dirname, '..', 'package.json'), 'utf-8')
+      readFileSync(join(fileURLToPath(new URL('.', import.meta.url)), '..', 'package.json'), 'utf-8')
     );
     return pkg.version as string;
   } catch {

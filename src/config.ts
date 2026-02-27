@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import type { UsegraphConfig } from './types';
+import type { UsegraphConfig } from './types.js';
 
 const CONFIG_FILENAMES = [
   'usegraph.config.json',

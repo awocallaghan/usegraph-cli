@@ -2,9 +2,9 @@
  * Tests for src/analyzer/lockfile.ts — parseSemver + NpmLockfileParser.
  */
 
-const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const { parseSemver, npmLockfileParser, pnpmLockfileParser, yarnV1LockfileParser, yarnBerryLockfileParser } = require('../dist/analyzer/lockfile');
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { parseSemver, npmLockfileParser, pnpmLockfileParser, yarnV1LockfileParser, yarnBerryLockfileParser } from '../dist/analyzer/lockfile.js';
 
 // ─── parseSemver ──────────────────────────────────────────────────────────────
 

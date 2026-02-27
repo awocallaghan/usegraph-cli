@@ -4,15 +4,15 @@
  * Requires: dist/ to be built (pnpm build) before running.
  */
 
-const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const { mkdirSync, writeFileSync, rmSync } = require('node:fs');
-const { join } = require('node:path');
-const { tmpdir } = require('node:os');
-const { randomUUID } = require('node:crypto');
-const { spawnSync } = require('node:child_process');
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join, basename } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 
-const { computeProjectSlug, parseRemoteUrl } = require('../dist/analyzer/project-identity');
+import { computeProjectSlug, parseRemoteUrl } from '../dist/analyzer/project-identity.js';
 
 // ─── parseRemoteUrl unit tests ────────────────────────────────────────────────
 
@@ -79,7 +79,7 @@ test('computeProjectSlug falls through to basename when package.json name is emp
     writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '' }), 'utf-8');
     const slug = computeProjectSlug(root);
     // Should be the basename since name is empty
-    assert.equal(slug, require('path').basename(root));
+    assert.equal(slug, basename(root));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -91,7 +91,7 @@ test('computeProjectSlug falls through to basename when package.json is malforme
   try {
     writeFileSync(join(root, 'package.json'), 'NOT_JSON', 'utf-8');
     const slug = computeProjectSlug(root);
-    assert.equal(slug, require('path').basename(root));
+    assert.equal(slug, basename(root));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -103,7 +103,7 @@ test('computeProjectSlug falls through to basename when no package.json and no g
   try {
     // No package.json, no git repo
     const slug = computeProjectSlug(root);
-    assert.equal(slug, require('path').basename(root));
+    assert.equal(slug, basename(root));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

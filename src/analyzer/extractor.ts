@@ -9,7 +9,7 @@
  *  - Function calls:    createTheme({ ... })
  *  - Member calls:      DS.createTheme({ ... })
  */
-import { walkAst, type AstNode } from './walker';
+import { walkAst, type AstNode } from './walker.js';
 import type {
   ImportInfo,
   ImportSpecifierInfo,
@@ -17,7 +17,7 @@ import type {
   FunctionCallInfo,
   PropInfo,
   ArgInfo,
-} from '../types';
+} from '../types.js';
 
 // Map: localName -> { source, imported, type }
 type ImportMap = Map<string, { source: string; imported: string; type: ImportSpecifierInfo['type'] }>;

@@ -13,29 +13,29 @@
  * Run: node --test tests/e2e.test.js
  */
 
-'use strict';
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const { test, before, after } = require('node:test');
-const assert = require('node:assert/strict');
-const { mkdtempSync, rmSync, existsSync } = require('node:fs');
-const { join, resolve } = require('node:path');
-const { tmpdir } = require('node:os');
-const { spawnSync } = require('node:child_process');
-
-// ─── Step 1: set USEGRAPH_HOME before requiring any dist modules ──────────────
-// The build and mcp modules evaluate process.env.USEGRAPH_HOME at load time,
-// so we must set it before the first require() of those modules.
+// ─── Step 1: set USEGRAPH_HOME before importing any dist modules ──────────────
+// In ESM, static imports are hoisted. We use dynamic import() below so that
+// dist modules (which read USEGRAPH_HOME at evaluation time) pick up the temp dir.
 
 const USEGRAPH_HOME = mkdtempSync(join(tmpdir(), 'usegraph-e2e-'));
 process.env.USEGRAPH_HOME = USEGRAPH_HOME;
 
-// ─── Step 2: require dist modules (they now pick up the temp dir) ─────────────
+// ─── Step 2: dynamically import dist modules (they now pick up the temp dir) ──
 
-const { runBuild } = require('../dist/commands/build');
-const { callTool } = require('../dist/commands/mcp');
+const { runBuild } = await import('../dist/commands/build.js');
+const { callTool } = await import('../dist/commands/mcp.js');
 
 // ─── Fixture paths ────────────────────────────────────────────────────────────
 
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const FIXTURES_ROOT = resolve(__dirname, 'fixtures/org');
 const FIXTURE_PROJECTS = [
   join(FIXTURES_ROOT, 'apps/web-app'),
@@ -199,7 +199,7 @@ test('get_scan_metadata: project_count is 6', async () => {
 });
 
 test('internal imports are not captured: no relative/alias paths in component or function usages', async () => {
-  const { queryParquet, requireParquet } = require('../dist/parquet-query');
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
 
   const cuPath = requireParquet('component_usages');
   const fuPath = requireParquet('function_usages');
@@ -223,7 +223,7 @@ test('internal imports are not captured: no relative/alias paths in component or
 });
 
 test('subpath external imports (@acme/ui/icons) are captured', async () => {
-  const { queryParquet, requireParquet } = require('../dist/parquet-query');
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
   const cuPath = requireParquet('component_usages');
   const rows = await queryParquet(
     `SELECT DISTINCT package_name FROM read_parquet('${cuPath.replace(/'/g, "''")}') WHERE is_latest = true AND package_name = '@acme/ui/icons'`

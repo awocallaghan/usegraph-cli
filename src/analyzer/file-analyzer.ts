@@ -4,9 +4,9 @@
 import { parse } from '@swc/core';
 import { readFile } from 'fs/promises';
 import { relative } from 'path';
-import { extractFromAst } from './extractor';
-import type { AstNode } from './walker';
-import type { FileAnalysis } from '../types';
+import { extractFromAst } from './extractor.js';
+import type { AstNode } from './walker.js';
+import type { FileAnalysis } from '../types.js';
 
 // Extensions that may contain JSX
 const JSX_EXTENSIONS = new Set(['.tsx', '.jsx', '.js', '.mjs']);

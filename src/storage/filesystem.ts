@@ -5,9 +5,9 @@ import {
   loadLatestScanResult,
   loadScanResult,
   listScans,
-} from '../storage';
-import type { ScanResult, UsegraphConfig } from '../types';
-import type { StorageBackend } from './backend';
+} from '../storage.js';
+import type { ScanResult, UsegraphConfig } from '../types.js';
+import type { StorageBackend } from './backend.js';
 
 /**
  * Root directory for the global cross-project store.

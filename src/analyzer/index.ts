@@ -1,4 +1,4 @@
-export { scanProject } from './scanner';
-export { analyzeFile } from './file-analyzer';
-export { analyzeProjectMeta } from './meta-analyzer';
-export type { ScanOptions, ProgressFn } from './scanner';
+export { scanProject } from './scanner.js';
+export { analyzeFile } from './file-analyzer.js';
+export { analyzeProjectMeta } from './meta-analyzer.js';
+export type { ScanOptions, ProgressFn } from './scanner.js';

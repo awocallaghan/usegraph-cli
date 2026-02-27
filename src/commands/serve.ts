@@ -13,11 +13,12 @@
  */
 import * as http from 'http';
 import { resolve } from 'path';
+import { execSync } from 'child_process';
 import chalk from 'chalk';
-import { loadConfig } from '../config';
-import { computeProjectSlug } from '../analyzer/project-identity';
-import { createStorageBackend } from '../storage/index';
-import type { ScanResult } from '../types';
+import { loadConfig } from '../config.js';
+import { computeProjectSlug } from '../analyzer/project-identity.js';
+import { createStorageBackend } from '../storage/index.js';
+import type { ScanResult } from '../types.js';
 
 export interface ServeCommandOptions {
   port?: string;
@@ -89,7 +90,6 @@ export async function runServe(
 // ─────────────────────────────────────────────────────────────────────────────
 
 function openBrowser(url: string): void {
-  const { execSync } = require('child_process') as typeof import('child_process');
   try {
     if (process.platform === 'darwin') {
       execSync(`open "${url}"`, { stdio: 'ignore' });
