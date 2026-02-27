@@ -18,13 +18,14 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, createReadStream, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, createReadStream, existsSync, copyFileSync, renameSync } from 'node:fs';
 import { join, resolve, extname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { initTestRepo, cleanupTestRepo } from './helpers/git.js';
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,14 @@ let browser;
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 before(async () => {
+  // 0. Init ephemeral git repos so code_at is populated in scans
+  for (const projectPath of FIXTURE_PROJECTS) {
+    await initTestRepo(projectPath, [
+      { message: 'initial commit' },
+      { message: 'second commit', files: { 'src/_gitmarker.ts': '// marker\n' } },
+    ]);
+  }
+
   // 1. Compile TypeScript CLI (needed for scan + build steps)
   const tscResult = spawnSync(
     'npx', ['tsc'],
@@ -150,6 +159,10 @@ after(async () => {
   await browser?.close();
   server?.close();
   try { rmSync(USEGRAPH_HOME, { recursive: true, force: true }); } catch { /* best-effort */ }
+  // Clean up ephemeral .git directories from fixture projects
+  for (const projectPath of FIXTURE_PROJECTS) {
+    cleanupTestRepo(projectPath);
+  }
 });
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
@@ -197,4 +210,60 @@ test('component-explorer page loads without runtime errors', async () => {
 test('function-explorer page loads without runtime errors', async () => {
   const errors = await checkPageForErrors('/function-explorer');
   assert.deepEqual(errors, [], `Runtime errors on function-explorer page:\n${errors.join('\n')}`);
+});
+
+test('project-detail and index pages load without errors when Parquet lacks code_at (backward compat)', async () => {
+  // Simulate an old Parquet file by rewriting project_snapshots.parquet without the code_at column.
+  // We use the DuckDB Node API (already a dependency) to do this in-process.
+  const duckdb = (await import('duckdb')).default;
+  const snapshotsFile = join(USEGRAPH_HOME, 'built', 'project_snapshots.parquet');
+
+  // Create a stripped copy (no code_at) as a temporary Parquet, then overwrite the real file.
+  const tmpFile = join(tmpdir(), `usegraph-test-nocodeat-${Date.now()}.parquet`);
+  const db = await new Promise((res, rej) => {
+    const d = new duckdb.Database(':memory:', e => e ? rej(e) : res(d));
+  });
+  const conn = db.connect();
+  const runVoid = (sql) => new Promise((res, rej) => conn.run(sql, e => e ? rej(e) : res()));
+  const safe = (p) => p.replace(/'/g, "''");
+
+  await runVoid(
+    `COPY (SELECT * EXCLUDE (code_at) FROM read_parquet('${safe(snapshotsFile)}'))` +
+    ` TO '${safe(tmpFile)}' (FORMAT PARQUET)`,
+  );
+  conn.close();
+  await new Promise(res => db.close(() => res()));
+
+  // Back up and overwrite the real file so the data loader sees the old format.
+  const backupFile = snapshotsFile + '.bak';
+  copyFileSync(snapshotsFile, backupFile);
+  renameSync(tmpFile, snapshotsFile);
+
+  try {
+    // Re-run the observable build so the data loader migration runs.
+    const rebuildResult = spawnSync(
+      'npx', ['@observablehq/framework', 'build'],
+      {
+        env: { ...process.env, USEGRAPH_HOME },
+        encoding: 'utf-8',
+        timeout: 120_000,
+        cwd: join(ROOT, 'src/dashboard'),
+      },
+    );
+    if (rebuildResult.status !== 0) {
+      throw new Error(`observable build failed:\n${rebuildResult.stderr?.slice(0, 500)}`);
+    }
+    // The static server already serves from DIST_DASHBOARD — no reassignment needed.
+
+    const indexErrors = await checkPageForErrors('/index');
+    const detailErrors = await checkPageForErrors('/project-detail');
+    assert.deepEqual(
+      [...indexErrors, ...detailErrors],
+      [],
+      `Runtime errors with legacy Parquet (no code_at):\n${[...indexErrors, ...detailErrors].join('\n')}`,
+    );
+  } finally {
+    // Restore the original file.
+    renameSync(backupFile, snapshotsFile);
+  }
 });
