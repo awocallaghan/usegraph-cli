@@ -100,6 +100,7 @@ Inputs.table(overview.projects, {
     scanned_at: "Last scanned",
   },
   format: {
+    project_id: (d) => html`<a href="/project-detail?project=${encodeURIComponent(d)}">${d}</a>`,
     scanned_at: (d) => new Date(d).toLocaleString(),
   },
 })
