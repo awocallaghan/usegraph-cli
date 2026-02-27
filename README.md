@@ -64,6 +64,8 @@ Options:
   -o, --output <dir>           Output directory for results (default: .usegraph)
   --concurrency <n>            Number of files to analyse in parallel (default: 8)
   --json                       Print raw JSON result to stdout instead of saving
+  --force                      Re-scan even if this commit was already scanned
+  --history [n]                Scan the last N commits of git history (default: 10)
 ```
 
 **Examples:**
@@ -80,7 +82,43 @@ usegraph scan ./my-project
 
 # Stream JSON output for further processing
 usegraph scan ./my-project --packages react --json | jq '.summary'
+
+# Re-scan even if this commit has already been scanned
+usegraph scan --packages @acme/ui --force
+
+# Scan the last 10 commits (default) to build a usage history
+usegraph scan --packages @acme/ui --history
+
+# Scan the last 50 commits
+usegraph scan --packages @acme/ui --history 50
 ```
+
+**`codeAt` vs `scannedAt`**
+
+Each scan records two timestamps:
+
+- `scannedAt` — when `usegraph scan` was executed (wall-clock time).
+- `codeAt` — the ISO timestamp of the git commit that was scanned (from
+  `git log -1 --format=%cI HEAD`). This is `null` when the project is not in a
+  git repository.
+
+When `codeAt` is available, it is used as the authoritative "code date" for
+trend queries and `is_latest` computation. This means that running `--history`
+will correctly attribute older scans to their original commit dates even if
+those scans were executed recently.
+
+**Deduplication**
+
+When a project is inside a git repository, the scan ID is set to the commit SHA.
+Running `usegraph scan` twice on the same commit will produce the same ID and
+overwrite the previous result. Use `--force` to skip the check and overwrite
+unconditionally.
+
+**History scanning**
+
+`--history [N]` walks `git log` for the last N commits and scans each one in
+isolation using `git worktree`, without modifying the working tree. Already-scanned
+commits are skipped automatically (idempotent). Progress is reported per commit.
 
 ---
 
