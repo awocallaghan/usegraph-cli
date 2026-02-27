@@ -31,48 +31,57 @@ const selectedProject = (urlProject && meta.projectIds.includes(urlProject))
 
 ```js
 // ── Core queries — re-run reactively when selectedProject changes ──────────
+// All five queries are independent so they run in parallel via Promise.all.
 
 const safeId = selectedProject.replace(/'/g, "''");
 
-const allSnapshots = Array.from(await db.query(
-  `SELECT * FROM project_snapshots WHERE project_id = '${safeId}' ORDER BY scanned_at DESC`
-));
+const [allSnapshots, deps, componentUsages, functionUsages, scanHistory] = await Promise.all([
+  db.query(
+    `SELECT project_id, scanned_at, is_latest, framework, framework_version, package_manager,
+            build_tool, test_framework, linter, formatter, css_approach,
+            typescript, typescript_version, node_version, branch, commit_sha
+     FROM project_snapshots WHERE project_id = '${safeId}' ORDER BY scanned_at DESC`
+  ).then(r => Array.from(r)),
+
+  db.query(
+    `SELECT package_name, version_resolved, version_range, dep_type,
+            version_is_prerelease, is_internal
+     FROM dependencies WHERE project_id = '${safeId}' AND is_latest = true
+     ORDER BY dep_type, package_name`
+  ).then(r => Array.from(r)),
+
+  db.query(
+    `SELECT package_name, component_name,
+            package_version_resolved, package_version_major, package_version_minor,
+            COUNT(*)::INTEGER AS usage_count
+     FROM component_usages
+     WHERE project_id = '${safeId}' AND is_latest = true
+     GROUP BY package_name, component_name, package_version_resolved, package_version_major, package_version_minor
+     ORDER BY package_name, usage_count DESC`
+  ).then(r => Array.from(r)),
+
+  db.query(
+    `SELECT package_name, export_name,
+            package_version_resolved, package_version_major, package_version_minor,
+            COUNT(*)::INTEGER AS call_count
+     FROM function_usages
+     WHERE project_id = '${safeId}' AND is_latest = true
+     GROUP BY package_name, export_name, package_version_resolved, package_version_major, package_version_minor
+     ORDER BY package_name, call_count DESC`
+  ).then(r => Array.from(r)),
+
+  db.query(
+    `SELECT scanned_at, SUM(cu)::INTEGER AS component_count, SUM(fu)::INTEGER AS function_count
+     FROM (
+       SELECT scanned_at, COUNT(*) AS cu, 0 AS fu FROM component_usages WHERE project_id = '${safeId}' GROUP BY scanned_at
+       UNION ALL
+       SELECT scanned_at, 0 AS cu, COUNT(*) AS fu FROM function_usages  WHERE project_id = '${safeId}' GROUP BY scanned_at
+     )
+     GROUP BY scanned_at ORDER BY scanned_at`
+  ).then(r => Array.from(r)),
+]);
 
 const latestSnapshot = allSnapshots.find(r => r.is_latest) ?? allSnapshots[0] ?? null;
-
-const deps = Array.from(await db.query(
-  `SELECT * FROM dependencies WHERE project_id = '${safeId}' AND is_latest = true ORDER BY dep_type, package_name`
-));
-
-const componentUsages = Array.from(await db.query(
-  `SELECT package_name, component_name,
-          package_version_resolved, package_version_major, package_version_minor,
-          COUNT(*)::INTEGER AS usage_count
-   FROM component_usages
-   WHERE project_id = '${safeId}' AND is_latest = true
-   GROUP BY package_name, component_name, package_version_resolved, package_version_major, package_version_minor
-   ORDER BY package_name, usage_count DESC`
-));
-
-const functionUsages = Array.from(await db.query(
-  `SELECT package_name, export_name,
-          package_version_resolved, package_version_major, package_version_minor,
-          COUNT(*)::INTEGER AS call_count
-   FROM function_usages
-   WHERE project_id = '${safeId}' AND is_latest = true
-   GROUP BY package_name, export_name, package_version_resolved, package_version_major, package_version_minor
-   ORDER BY package_name, call_count DESC`
-));
-
-const scanHistory = Array.from(await db.query(
-  `SELECT scanned_at, SUM(cu)::INTEGER AS component_count, SUM(fu)::INTEGER AS function_count
-   FROM (
-     SELECT scanned_at, COUNT(*) AS cu, 0 AS fu FROM component_usages WHERE project_id = '${safeId}' GROUP BY scanned_at
-     UNION ALL
-     SELECT scanned_at, 0 AS cu, COUNT(*) AS fu FROM function_usages  WHERE project_id = '${safeId}' GROUP BY scanned_at
-   )
-   GROUP BY scanned_at ORDER BY scanned_at`
-));
 ```
 
 ---
