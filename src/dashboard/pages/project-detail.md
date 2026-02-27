@@ -271,6 +271,24 @@ filteredFunctions.length > 0
   : html`<p style="color:var(--theme-foreground-muted)">No function usage data for <strong>${selectedProject}</strong>.</p>`
 ```
 
+```js
+filteredFunctions.length > 0
+  ? Inputs.table(filteredFunctions, {
+      columns: ["package_name", "export_name", "call_count"],
+      header: { package_name: "Package", export_name: "Function", call_count: "Calls" },
+      sort: "call_count",
+      reverse: true,
+      format: {
+        export_name: (name, i) => {
+          const pkg = filteredFunctions[i]?.package_name ?? "";
+          const url = `/function-explorer?package=${encodeURIComponent(pkg)}&function=${encodeURIComponent(name)}&project=${encodeURIComponent(selectedProject)}`;
+          return html`<a href="${url}">${name}</a>`;
+        },
+      },
+    })
+  : null
+```
+
 ---
 
 ## Scan history
