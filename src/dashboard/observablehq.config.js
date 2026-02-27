@@ -6,5 +6,6 @@ export default {
     { name: "Dependencies", path: "/dependencies" },
     { name: "Package Adoption", path: "/package-adoption" },
     { name: "Project Detail", path: "/project-detail" },
+    { name: "Component Explorer", path: "/component-explorer" },
   ],
 };

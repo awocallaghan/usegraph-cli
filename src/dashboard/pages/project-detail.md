@@ -211,6 +211,24 @@ filteredComponents.length > 0
   : html`<p style="color:var(--theme-foreground-muted)">No component usage data for <strong>${selectedProject}</strong>.</p>`
 ```
 
+```js
+filteredComponents.length > 0
+  ? Inputs.table(filteredComponents, {
+      columns: ["package_name", "component_name", "usage_count"],
+      header: { package_name: "Package", component_name: "Component", usage_count: "Usages" },
+      sort: "usage_count",
+      reverse: true,
+      format: {
+        component_name: (name, i) => {
+          const pkg = filteredComponents[i]?.package_name ?? "";
+          const url = `/component-explorer?package=${encodeURIComponent(pkg)}&component=${encodeURIComponent(name)}&project=${encodeURIComponent(selectedProject)}`;
+          return html`<a href="${url}">${name}</a>`;
+        },
+      },
+    })
+  : null
+```
+
 ---
 
 ## Function usage
