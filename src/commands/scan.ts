@@ -12,11 +12,11 @@
 import chalk from 'chalk';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
-import { loadConfig } from '../config';
-import { scanProject } from '../analyzer';
-import { computeProjectSlug } from '../analyzer/project-identity';
-import { createStorageBackend } from '../storage/index';
-import type { ScanResult } from '../types';
+import { loadConfig } from '../config.js';
+import { scanProject } from '../analyzer/index.js';
+import { computeProjectSlug } from '../analyzer/project-identity.js';
+import { createStorageBackend } from '../storage/index.js';
+import type { ScanResult } from '../types.js';
 
 export interface ScanCommandOptions {
   packages?: string;

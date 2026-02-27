@@ -4,24 +4,48 @@
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
+import duckdb from 'duckdb';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /**
  * Root of the global store.
  * Override with the `USEGRAPH_HOME` environment variable (useful for testing).
+ * Evaluated lazily so the env var can be set after module load (e.g. in tests).
  */
-export const STORE_ROOT = process.env.USEGRAPH_HOME ?? join(homedir(), '.usegraph');
-export const BUILT_DIR = join(STORE_ROOT, 'built');
+export function getStoreRoot(): string {
+  return process.env.USEGRAPH_HOME ?? join(homedir(), '.usegraph');
+}
 
-export const PARQUET = {
-  project_snapshots: join(BUILT_DIR, 'project_snapshots.parquet'),
-  dependencies: join(BUILT_DIR, 'dependencies.parquet'),
-  component_usages: join(BUILT_DIR, 'component_usages.parquet'),
-  component_prop_usages: join(BUILT_DIR, 'component_prop_usages.parquet'),
-  function_usages: join(BUILT_DIR, 'function_usages.parquet'),
-  function_arg_usages: join(BUILT_DIR, 'function_arg_usages.parquet'),
-} as const;
+export function getBuiltDir(): string {
+  return join(getStoreRoot(), 'built');
+}
+
+/** @deprecated Use getBuiltDir() */
+export function getParquet(): Record<string, string> {
+  const builtDir = getBuiltDir();
+  return {
+    project_snapshots: join(builtDir, 'project_snapshots.parquet'),
+    dependencies: join(builtDir, 'dependencies.parquet'),
+    component_usages: join(builtDir, 'component_usages.parquet'),
+    component_prop_usages: join(builtDir, 'component_prop_usages.parquet'),
+    function_usages: join(builtDir, 'function_usages.parquet'),
+    function_arg_usages: join(builtDir, 'function_arg_usages.parquet'),
+  };
+}
+
+// Keep static exports for callers that use them directly (evaluated once at import time).
+// New code should prefer getBuiltDir() / getParquet() so env overrides work.
+export const STORE_ROOT = getStoreRoot();
+export const BUILT_DIR = getBuiltDir();
+export const PARQUET = getParquet() as {
+  project_snapshots: string;
+  dependencies: string;
+  component_usages: string;
+  component_prop_usages: string;
+  function_usages: string;
+  function_arg_usages: string;
+};
 
 /** Tooling categories that may appear as a SQL column name */
 export const TOOLING_CATEGORY_ALLOWLIST = new Set([
@@ -45,7 +69,7 @@ export function sqlStr(s: string): string {
 
 /** Check if a Parquet file exists, throw a clear error if not. */
 export function requireParquet(name: keyof typeof PARQUET): string {
-  const path = PARQUET[name];
+  const path = getParquet()[name];
   if (!existsSync(path)) {
     throw new Error(
       `Parquet file not found: ${path}\n  Run \`usegraph build\` first.`,
@@ -67,17 +91,7 @@ function sanitizeBigInt(val: unknown): unknown {
 
 /** Open an in-memory DuckDB and run a query against the Parquet files. */
 export async function queryParquet(sql: string): Promise<Record<string, unknown>[]> {
-  let duckdb: typeof import('duckdb');
-  try {
-    duckdb = await import('duckdb');
-  } catch (err) {
-    throw new Error(
-      'DuckDB failed to load. Run `pnpm add duckdb && pnpm rebuild duckdb`.\n' +
-        `  Original error: ${String(err)}`,
-    );
-  }
-
-  const db = await new Promise<import('duckdb').Database>((resolve, reject) => {
+  const db = await new Promise<duckdb.Database>((resolve, reject) => {
     const inst = new duckdb.Database(':memory:', (err) => {
       if (err) reject(err);
       else resolve(inst);

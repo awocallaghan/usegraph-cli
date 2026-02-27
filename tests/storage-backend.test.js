@@ -7,15 +7,15 @@
  * Requires: dist/ to be built (pnpm build) before running.
  */
 
-const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const { mkdirSync, rmSync } = require('node:fs');
-const { join } = require('node:path');
-const { tmpdir, homedir } = require('node:os');
-const { randomUUID } = require('node:crypto');
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdirSync, rmSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { tmpdir, homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 
-const { FilesystemBackend, GLOBAL_STORE_ROOT } = require('../dist/storage/filesystem');
-const { createStorageBackend } = require('../dist/storage/index');
+import { FilesystemBackend, GLOBAL_STORE_ROOT } from '../dist/storage/filesystem.js';
+import { createStorageBackend } from '../dist/storage/index.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ test('resolveDir: --output flag returns project-relative path', () => {
   const config = makeConfig();
 
   const dir = FilesystemBackend.resolveDir(projectPath, slug, '.usegraph', config);
-  assert.equal(dir, require('path').resolve(projectPath, '.usegraph'));
+  assert.equal(dir, resolve(projectPath, '.usegraph'));
 });
 
 test('resolveDir: config.outputDir returns project-relative path', () => {
@@ -68,7 +68,7 @@ test('resolveDir: config.outputDir returns project-relative path', () => {
   const config = makeConfig({ outputDir: '.usegraph' });
 
   const dir = FilesystemBackend.resolveDir(projectPath, slug, undefined, config);
-  assert.equal(dir, require('path').resolve(projectPath, '.usegraph'));
+  assert.equal(dir, resolve(projectPath, '.usegraph'));
 });
 
 test('resolveDir: empty config.outputDir returns global store path', () => {

@@ -9,7 +9,7 @@
  */
 import { existsSync, readFileSync } from 'fs';
 import { join, relative } from 'path';
-import type { DependencyEntry, ProjectMeta, ToolingMeta } from '../types';
+import type { DependencyEntry, ProjectMeta, ToolingMeta } from '../types.js';
 
 // Internal type — not exported; used by the legacy config-file detection table
 interface ToolingInfo {

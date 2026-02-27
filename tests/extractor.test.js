@@ -4,10 +4,10 @@
  * the structured data returned by extractFromAst.
  */
 
-const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const { parse } = require('@swc/core');
-const { extractFromAst } = require('../dist/analyzer/extractor');
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { parse } from '@swc/core';
+import { extractFromAst } from '../dist/analyzer/extractor.js';
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
 

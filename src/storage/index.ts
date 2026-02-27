@@ -1,9 +1,9 @@
-export type { StorageBackend } from './backend';
-export { FilesystemBackend, GLOBAL_STORE_ROOT } from './filesystem';
+export type { StorageBackend } from './backend.js';
+export { FilesystemBackend, GLOBAL_STORE_ROOT } from './filesystem.js';
 
-import { FilesystemBackend } from './filesystem';
-import type { UsegraphConfig } from '../types';
-import type { StorageBackend } from './backend';
+import { FilesystemBackend } from './filesystem.js';
+import type { UsegraphConfig } from '../types.js';
+import type { StorageBackend } from './backend.js';
 
 /**
  * Factory function used by all commands.

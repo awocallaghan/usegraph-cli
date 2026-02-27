@@ -10,18 +10,18 @@ import fg from 'fast-glob';
 import { existsSync, readFileSync, statSync } from 'fs';
 import { basename, join } from 'path';
 import { spawnSync } from 'child_process';
-import { analyzeFile } from './file-analyzer';
-import { analyzeProjectMeta } from './meta-analyzer';
+import { analyzeFile } from './file-analyzer.js';
+import { analyzeProjectMeta } from './meta-analyzer.js';
 import {
   npmLockfileParser,
   pnpmLockfileParser,
   yarnV1LockfileParser,
   yarnBerryLockfileParser,
   type ResolvedDependency,
-} from './lockfile';
-import { loadFileCache, saveFileCache } from '../storage';
-import type { FileCacheEntry, FileCache } from '../storage';
-import type { FileAnalysis, ScanResult, ScanSummary, PackageSummary, UsegraphConfig } from '../types';
+} from './lockfile.js';
+import { loadFileCache, saveFileCache } from '../storage.js';
+import type { FileCacheEntry, FileCache } from '../storage.js';
+import type { FileAnalysis, ScanResult, ScanSummary, PackageSummary, UsegraphConfig } from '../types.js';
 import { randomUUID } from 'crypto';
 
 /** Progress callback for CLI feedback */

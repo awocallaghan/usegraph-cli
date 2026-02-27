@@ -29,7 +29,8 @@ import {
   unlinkSync,
 } from 'fs';
 import chalk from 'chalk';
-import type { ScanResult } from '../types';
+import duckdb from 'duckdb';
+import type { ScanResult } from '../types.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -420,19 +421,7 @@ function stringify(value: string | number | boolean | null | undefined): string 
 // ─── DuckDB Parquet writer ────────────────────────────────────────────────────
 
 async function writeParquetFiles(rows: AllRows, opts: BuildOptions): Promise<void> {
-  // Dynamic import so the native module is only loaded when 'build' is invoked
-  let duckdb: typeof import('duckdb');
-  try {
-    duckdb = await import('duckdb');
-  } catch (err) {
-    throw new Error(
-      'DuckDB failed to load — it may not be installed or the native binary is missing.\n' +
-        `  Run: pnpm add duckdb && pnpm rebuild duckdb\n` +
-        `  Original error: ${String(err)}`,
-    );
-  }
-
-  const db = await new Promise<import('duckdb').Database>((resolve, reject) => {
+  const db = await new Promise<duckdb.Database>((resolve, reject) => {
     const instance = new duckdb.Database(':memory:', (err) => {
       if (err) reject(err);
       else resolve(instance);

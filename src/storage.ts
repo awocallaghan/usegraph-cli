@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { copyFileSync } from 'fs';
 import { join } from 'path';
-import type { ScanResult, FileAnalysis } from './types';
+import type { ScanResult, FileAnalysis } from './types.js';
 
 export function saveScanResult(outputDir: string, result: ScanResult): string {
   const scansDir = join(outputDir, 'scans');

@@ -1,4 +1,4 @@
-import type { ScanResult } from '../types';
+import type { ScanResult } from '../types.js';
 
 /**
  * Abstraction over the storage backend.

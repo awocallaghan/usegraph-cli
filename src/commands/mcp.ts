@@ -28,14 +28,16 @@
 import { existsSync } from 'fs';
 import chalk from 'chalk';
 import * as z from 'zod';
+import { McpServer } from 'tmcp';
+import { ZodJsonSchemaAdapter } from '@tmcp/adapter-zod';
+import { StdioTransport } from '@tmcp/transport-stdio';
 import {
-  BUILT_DIR,
-  PARQUET,
+  getBuiltDir,
   TOOLING_CATEGORY_ALLOWLIST,
   queryParquet,
   requireParquet,
   sqlStr,
-} from '../parquet-query';
+} from '../parquet-query.js';
 
 // ─── CLI options ──────────────────────────────────────────────────────────────
 
@@ -490,16 +492,7 @@ export async function callTool(
 
 // ─── MCP server (tmcp) ───────────────────────────────────────────────────────
 
-// Use a runtime dynamic import to load ESM-only packages (tmcp, transport-stdio,
-// adapter-zod) from this CommonJS-compiled module.
-// eslint-disable-next-line no-new-func, @typescript-eslint/no-implied-eval
-const esmImport = new Function('s', 'return import(s)') as (s: string) => Promise<Record<string, unknown>>;
-
 type ToolResult = { content: Array<{ type: 'text'; text: string }> };
-type ServerLike = {
-  tool: (opts: Record<string, unknown>, exec: (args: Record<string, unknown>) => Promise<ToolResult>) => void;
-};
-type TransportLike = { listen: () => void };
 
 function wrap(result: unknown): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(result, (_, v) => typeof v === 'bigint' ? Number(v) : v, 2) }] };
@@ -509,30 +502,21 @@ function wrap(result: unknown): ToolResult {
 
 export async function runMcp(opts: McpOptions = {}): Promise<void> {
   const verbose = opts.verbose ?? false;
+  const builtDir = getBuiltDir();
 
   process.stderr.write(
     chalk.green('usegraph MCP server started') +
       chalk.dim(' (stdio transport, tmcp)\n'),
   );
-  process.stderr.write(chalk.dim(`  Parquet dir: ${BUILT_DIR}\n`));
+  process.stderr.write(chalk.dim(`  Parquet dir: ${builtDir}\n`));
 
-  if (!existsSync(BUILT_DIR)) {
+  if (!existsSync(builtDir)) {
     process.stderr.write(
       chalk.yellow(
-        `  Warning: ${BUILT_DIR} does not exist. Run \`usegraph build\` first.\n`,
+        `  Warning: ${builtDir} does not exist. Run \`usegraph build\` first.\n`,
       ),
     );
   }
-
-  const [{ McpServer }, { ZodJsonSchemaAdapter }, { StdioTransport }] = await Promise.all([
-    esmImport('tmcp'),
-    esmImport('@tmcp/adapter-zod'),
-    esmImport('@tmcp/transport-stdio'),
-  ]) as [
-    { McpServer: new (info: unknown, opts: unknown) => ServerLike },
-    { ZodJsonSchemaAdapter: new () => unknown },
-    { StdioTransport: new (server: unknown) => TransportLike },
-  ];
 
   const server = new McpServer(
     { name: 'usegraph', version: '0.1.0' },
@@ -716,7 +700,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
     async (input) => wrap(await toolGetSourceContext(input as Parameters<typeof toolGetSourceContext>[0])),
   );
 
-  const transport = new StdioTransport(server as unknown);
+  const transport = new StdioTransport(server);
   transport.listen();
 
   // Keep the process alive until stdin closes (StdioTransport calls process.exit on close)

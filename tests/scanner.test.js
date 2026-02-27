@@ -13,15 +13,16 @@
  * Requires: dist/ to be built (pnpm build) before running.
  */
 
-const { test, after, before } = require('node:test');
-const assert = require('node:assert/strict');
-const { mkdirSync, writeFileSync, rmSync, existsSync } = require('node:fs');
-const { join } = require('node:path');
-const { tmpdir } = require('node:os');
-const { randomUUID } = require('node:crypto');
+import { test, after, before } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 
-const { scanProject } = require('../dist/analyzer');
-const { saveScanResult, loadLatestScanResult, loadFileCache } = require('../dist/storage');
+import { scanProject } from '../dist/analyzer/index.js';
+import { saveScanResult, loadLatestScanResult, loadFileCache } from '../dist/storage.js';
+import { writeDefaultConfig, loadConfig } from '../dist/config.js';
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -375,8 +376,6 @@ test('loadLatestScanResult returns null when no scan exists', () => {
 });
 
 // ─── Regression: src/-only include patterns miss files outside src/ ────────────
-
-const { writeDefaultConfig, loadConfig } = require('../dist/config');
 
 /**
  * Reproduces the bug where `usegraph init` created configs with `src/**` patterns

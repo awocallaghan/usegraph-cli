@@ -3,9 +3,9 @@
  * Tests the generic SWC AST walker: node visiting, tree pruning, array handling.
  */
 
-const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const { walkAst } = require('../dist/analyzer/walker');
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { walkAst } from '../dist/analyzer/walker.js';
 
 test('visits the root node itself', () => {
   const ast = { type: 'Module', body: [] };

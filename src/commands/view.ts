@@ -21,7 +21,7 @@
  *   (default)                → single-project or multi-project overview
  */
 import chalk from 'chalk';
-import { queryParquet, requireParquet, sqlStr } from '../parquet-query';
+import { queryParquet, requireParquet, sqlStr } from '../parquet-query.js';
 
 // ─── Options ──────────────────────────────────────────────────────────────────
 
