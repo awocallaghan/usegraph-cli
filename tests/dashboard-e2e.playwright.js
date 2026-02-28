@@ -190,6 +190,44 @@ async function checkPageForErrors(path, waitMs = 5000) {
   return errors;
 }
 
+/**
+ * Navigate to a DuckDB-powered page, wait for the loading indicator to
+ * disappear (meaning DuckDB finished its query), then return any JS errors.
+ *
+ * @param {string} path  - URL path, e.g. '/component-explorer'
+ * @param {string} loadingSelector - CSS selector for the element that must
+ *   disappear once data has loaded. Defaults to the Observable error/loading
+ *   placeholder rendered while a cell is pending.
+ */
+async function checkDuckDbPageLoads(path, loadingSelector = '.observablehq--loading') {
+  const url = `http://127.0.0.1:${serverPort}${path}`;
+  const page = await browser.newPage();
+  const errors = [];
+
+  page.on('pageerror', (err) => errors.push(`[pageerror] ${err.message}`));
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') {
+      errors.push(`[console.error] ${msg.text()}`);
+    }
+  });
+
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+
+    // Wait up to 30 s for the loading indicator to vanish.  If it never
+    // disappears the page has stalled (e.g. DuckDB failed to initialise).
+    try {
+      await page.waitForSelector(loadingSelector, { state: 'detached', timeout: 30_000 });
+    } catch {
+      errors.push(`[timeout] Loading indicator never disappeared on ${path} — DuckDB may have stalled`);
+    }
+  } finally {
+    await page.close();
+  }
+
+  return errors;
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 test('dashboard index page loads without runtime errors', async () => {
@@ -212,8 +250,21 @@ test('function-explorer page loads without runtime errors', async () => {
   assert.deepEqual(errors, [], `Runtime errors on function-explorer page:\n${errors.join('\n')}`);
 });
 
-test('project-detail and index pages load without errors when Parquet lacks code_at (backward compat)', async () => {
-  // Simulate an old Parquet file by rewriting project_snapshots.parquet without the code_at column.
+// DuckDB data-loading tests: verify that the SharedWorker DuckDB engine
+// actually finishes loading and the loading indicator disappears.
+// These catch the "Loading usage data… forever" regression.
+
+test('component-explorer page loads DuckDB data successfully', async () => {
+  const errors = await checkDuckDbPageLoads('/component-explorer', '#comp-loading-indicator');
+  assert.deepEqual(errors, [], `DuckDB failed to load on component-explorer:\n${errors.join('\n')}`);
+});
+
+test('function-explorer page loads DuckDB data successfully', async () => {
+  const errors = await checkDuckDbPageLoads('/function-explorer', '#fn-loading-indicator');
+  assert.deepEqual(errors, [], `DuckDB failed to load on function-explorer:\n${errors.join('\n')}`);
+});
+
+test('project-detail and index pages load without errors when Parquet lacks code_at (backward compat)', async () => {  // Simulate an old Parquet file by rewriting project_snapshots.parquet without the code_at column.
   // We use the DuckDB Node API (already a dependency) to do this in-process.
   const duckdb = (await import('duckdb')).default;
   const snapshotsFile = join(USEGRAPH_HOME, 'built', 'project_snapshots.parquet');
