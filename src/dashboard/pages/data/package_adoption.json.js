@@ -72,24 +72,27 @@ const allFunctionUsages = hasFu
     )
   : [];
 
-// Historical usage counts per (package_name, project_id, scanned_at) for trend chart.
+// Historical usage counts per (package_name, project_id, effective_date) for trend chart.
 // Uses ALL scans (not filtered by is_latest).
+// COALESCE(code_at, scanned_at): for --history scans every commit shares the same scanned_at
+// (the wall-clock time the command ran) but has a distinct code_at (the commit timestamp).
+// For regular scans code_at may be NULL, so we fall back to scanned_at.
 const historicalUsages = await (async () => {
   const parts = [];
   if (hasCu) {
     parts.push(
-      `SELECT package_name, project_id, scanned_at,
+      `SELECT package_name, project_id, COALESCE(code_at, scanned_at) AS scanned_at,
               COUNT(*)::INTEGER AS component_count, 0::INTEGER AS function_count
        FROM ${p('component_usages.parquet')}
-       GROUP BY package_name, project_id, scanned_at`,
+       GROUP BY package_name, project_id, COALESCE(code_at, scanned_at)`,
     );
   }
   if (hasFu) {
     parts.push(
-      `SELECT package_name, project_id, scanned_at,
+      `SELECT package_name, project_id, COALESCE(code_at, scanned_at) AS scanned_at,
               0::INTEGER AS component_count, COUNT(*)::INTEGER AS function_count
        FROM ${p('function_usages.parquet')}
-       GROUP BY package_name, project_id, scanned_at`,
+       GROUP BY package_name, project_id, COALESCE(code_at, scanned_at)`,
     );
   }
   if (parts.length === 0) return [];

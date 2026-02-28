@@ -231,11 +231,9 @@ versionSpread.length === 0
 ```js
 // Historical trend for the selected package (sum component + function counts per scanned_at)
 const trendData = (() => {
-  const filtered = data.historicalUsages.filter(d => {
-    if (d.package_name !== packageFilter) return false;
-    if (majorVersionFilter !== "All") return false; // historical data has no version filter available
-    return true;
-  });
+  // Historical data has no version breakdown, so we show all versions regardless of the
+  // majorVersionFilter selection (filtering would incorrectly return zero rows).
+  const filtered = data.historicalUsages.filter(d => d.package_name === packageFilter);
   // Aggregate per scanned_at across all projects
   const byDate = new Map();
   for (const d of filtered) {

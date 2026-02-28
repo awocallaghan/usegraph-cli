@@ -12,7 +12,7 @@
  */
 import { spawn } from 'child_process';
 import { execSync } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, rmSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
@@ -44,6 +44,14 @@ export async function runDashboard(opts: DashboardOptions): Promise<void> {
     console.error(chalk.red('No Parquet data found.'));
     console.error(chalk.dim('  Run `usegraph build` first to materialise Parquet tables.'));
     process.exit(1);
+  }
+
+  // Clear the data-loader cache so Observable always re-runs loaders against the
+  // current Parquet files rather than serving stale cached output from a previous run.
+  // The npm/stdlib cache (adjacent directories) is preserved since it rarely changes.
+  const dataCacheDir = join(dashboardDir, 'pages', '.observablehq', 'cache', 'data');
+  if (existsSync(dataCacheDir)) {
+    rmSync(dataCacheDir, { recursive: true, force: true });
   }
 
   const port = opts.port ?? '3000';

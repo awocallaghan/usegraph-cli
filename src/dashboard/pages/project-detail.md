@@ -73,9 +73,9 @@ const [allSnapshots, deps, componentUsages, functionUsages, scanHistory] = await
   db.query(
     `SELECT scanned_at, SUM(cu)::INTEGER AS component_count, SUM(fu)::INTEGER AS function_count
      FROM (
-       SELECT scanned_at, COUNT(*) AS cu, 0 AS fu FROM component_usages WHERE project_id = '${safeId}' GROUP BY scanned_at
+       SELECT COALESCE(code_at, scanned_at) AS scanned_at, COUNT(*) AS cu, 0 AS fu FROM component_usages WHERE project_id = '${safeId}' GROUP BY COALESCE(code_at, scanned_at)
        UNION ALL
-       SELECT scanned_at, 0 AS cu, COUNT(*) AS fu FROM function_usages  WHERE project_id = '${safeId}' GROUP BY scanned_at
+       SELECT COALESCE(code_at, scanned_at) AS scanned_at, 0 AS cu, COUNT(*) AS fu FROM function_usages  WHERE project_id = '${safeId}' GROUP BY COALESCE(code_at, scanned_at)
      )
      GROUP BY scanned_at ORDER BY scanned_at`
   ).then(r => Array.from(r)),
