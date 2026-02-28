@@ -30,6 +30,7 @@ if (existsSync(srcFile)) {
          SELECT
            NULL::VARCHAR    AS project_id,
            NULL::VARCHAR    AS scanned_at,
+           NULL::VARCHAR    AS code_at,
            NULL::BOOLEAN    AS is_latest,
            NULL::VARCHAR    AS package_name,
            NULL::VARCHAR    AS package_version_resolved,

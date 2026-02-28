@@ -30,15 +30,13 @@ const allPackages = await db.query(
 ```
 
 ```js
-// Resolve selected package: URL param → dropdown fallback
+// Resolve selected package: pre-select URL param if present, always show input
 const urlPackage = new URLSearchParams(location.search).get("package");
-const selectedPackage = (urlPackage && allPackages.includes(urlPackage))
-  ? urlPackage
-  : view(
-      allPackages.length > 0
-        ? Inputs.select(allPackages, { label: "Package" })
-        : Inputs.text({ label: "Package", placeholder: "No component usage data", disabled: true })
-    );
+const selectedPackage = view(
+  allPackages.length > 0
+    ? Inputs.select(allPackages, { label: "Package", value: urlPackage && allPackages.includes(urlPackage) ? urlPackage : allPackages[0] })
+    : Inputs.text({ label: "Package", placeholder: "No component usage data", disabled: true })
+);
 ```
 
 ```js
@@ -54,15 +52,13 @@ const allComponents = selectedPackage
 ```
 
 ```js
-// Resolve selected component: URL param → dropdown fallback
+// Resolve selected component: pre-select URL param if present, always show input
 const urlComponent = new URLSearchParams(location.search).get("component");
-const selectedComponent = (urlComponent && allComponents.includes(urlComponent))
-  ? urlComponent
-  : view(
-      allComponents.length > 0
-        ? Inputs.select(allComponents, { label: "Component" })
-        : Inputs.text({ label: "Component", placeholder: "Select a package first", disabled: true })
-    );
+const selectedComponent = view(
+  allComponents.length > 0
+    ? Inputs.select(allComponents, { label: "Component", value: urlComponent && allComponents.includes(urlComponent) ? urlComponent : allComponents[0] })
+    : Inputs.text({ label: "Component", placeholder: "Select a package first", disabled: true })
+);
 ```
 
 ```js
