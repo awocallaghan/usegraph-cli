@@ -50,8 +50,11 @@ const SCAN_ONLY  = args.includes('--scan-only');
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-function git(cwd, gitArgs) {
-  const r = spawnSync('git', ['-C', cwd, ...gitArgs], { encoding: 'utf-8' });
+function git(cwd, gitArgs, extraEnv = {}) {
+  const r = spawnSync('git', ['-C', cwd, ...gitArgs], {
+    encoding: 'utf-8',
+    env: { ...process.env, ...extraEnv },
+  });
   if (r.error) throw r.error;
   return r;
 }
@@ -106,13 +109,18 @@ if (!BUILD_ONLY) {
     mkdirSync(destPath, { recursive: true });
     cpSync(srcPath, destPath, { recursive: true });
 
-    // Init git with 2 commits
+    // Init git with 2 commits 30 days apart so code_at differs for the history chart
+    const date1 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const date2 = new Date().toISOString();
+
     git(destPath, ['init']);
     git(destPath, ['config', 'user.email', 'dev@dev.local']);
     git(destPath, ['config', 'user.name', 'Dev']);
     git(destPath, ['add', '.']);
-    git(destPath, ['commit', '-m', 'initial commit', '--allow-empty']);
-    git(destPath, ['commit', '-m', 'second commit', '--allow-empty']);
+    git(destPath, ['commit', '-m', 'initial commit', '--allow-empty'],
+      { GIT_AUTHOR_DATE: date1, GIT_COMMITTER_DATE: date1 });
+    git(destPath, ['commit', '-m', 'second commit', '--allow-empty'],
+      { GIT_AUTHOR_DATE: date2, GIT_COMMITTER_DATE: date2 });
 
     const sha = git(destPath, ['rev-parse', '--short', 'HEAD']).stdout.trim();
     process.stdout.write(`done (HEAD ${sha})\n`);

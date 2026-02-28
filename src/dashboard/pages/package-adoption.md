@@ -4,18 +4,33 @@ title: Package Adoption
 
 # Package Adoption
 
+<div id="pa-loading-indicator" style="display:flex;align-items:center;gap:10px;padding:1.25rem 0;color:var(--theme-foreground-muted)"><div style="flex-shrink:0;width:18px;height:18px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite"></div>Loading usage data…<style>@keyframes spin{to{transform:rotate(360deg)}}</style></div>
+
 ```js
-const data = await FileAttachment("data/package_adoption.json").json();
+// Load usage and snapshot tables via DuckDB WASM
+const db = await DuckDBClient.of({
+  component_usages:  FileAttachment("data/component_usages.parquet"),
+  function_usages:   FileAttachment("data/function_usages.parquet"),
+  project_snapshots: FileAttachment("data/project_snapshots.parquet"),
+});
 ```
 
 ```js
-// Derive sorted list of all packages across both usage tables
-const packages = Array.from(
-  new Set([
-    ...data.allComponentUsages.map(d => d.package_name),
-    ...data.allFunctionUsages.map(d => d.package_name),
-  ])
-).sort();
+// Build distinct package list across both usage tables (current state only)
+const packages = await db.query(
+  `SELECT DISTINCT package_name FROM component_usages WHERE is_latest = true
+   UNION
+   SELECT DISTINCT package_name FROM function_usages WHERE is_latest = true
+   ORDER BY package_name`
+).then(r => Array.from(r).map(d => d.package_name));
+```
+
+```js
+// Remove loading indicator once data is ready
+{
+  void packages;
+  document.getElementById("pa-loading-indicator")?.remove();
+}
 ```
 
 ```js
@@ -27,17 +42,17 @@ const packageFilter = view(
 ```
 
 ```js
-// Derive major versions available for the selected package
-const majorVersions = Array.from(
-  new Set([
-    ...data.allComponentUsages
-      .filter(d => d.package_name === packageFilter && d.package_version_major != null)
-      .map(d => d.package_version_major),
-    ...data.allFunctionUsages
-      .filter(d => d.package_name === packageFilter && d.package_version_major != null)
-      .map(d => d.package_version_major),
-  ])
-).sort((a, b) => a - b).map(String);
+// Major versions available for the selected package
+const majorVersions = packageFilter
+  ? await db.query(
+      `SELECT DISTINCT package_version_major FROM component_usages
+       WHERE is_latest = true AND package_name = '${packageFilter.replace(/'/g, "''")}' AND package_version_major IS NOT NULL
+       UNION
+       SELECT DISTINCT package_version_major FROM function_usages
+       WHERE is_latest = true AND package_name = '${packageFilter.replace(/'/g, "''")}' AND package_version_major IS NOT NULL
+       ORDER BY package_version_major`
+    ).then(r => Array.from(r).map(d => String(d.package_version_major)))
+  : [];
 ```
 
 ```js
@@ -47,21 +62,39 @@ const majorVersionFilter = view(
 ```
 
 ```js
-// Apply filters client-side
-function matchesMajor(d) {
-  return majorVersionFilter === "All" || String(d.package_version_major) === majorVersionFilter;
-}
+// Safe-escaped package name for SQL
+const safePkg = (packageFilter ?? "").replace(/'/g, "''");
+const majorWhere = majorVersionFilter === "All" ? "" : `AND package_version_major = ${majorVersionFilter}`;
+```
 
-const filteredComponents = data.allComponentUsages.filter(
-  d => d.package_name === packageFilter && matchesMajor(d)
-);
+```js
+// Current-state usage rows for the selected package + version filter
+const [filteredComponents, filteredFunctions, allProjects] = packageFilter
+  ? await Promise.all([
+      db.query(
+        `SELECT project_id, package_name, package_version_resolved,
+                package_version_major, package_version_minor, component_name
+         FROM component_usages
+         WHERE is_latest = true AND package_name = '${safePkg}' ${majorWhere}
+         ORDER BY component_name`
+      ).then(r => Array.from(r)),
 
-const filteredFunctions = data.allFunctionUsages.filter(
-  d => d.package_name === packageFilter && matchesMajor(d)
-);
+      db.query(
+        `SELECT project_id, package_name, package_version_resolved,
+                package_version_major, package_version_minor, export_name
+         FROM function_usages
+         WHERE is_latest = true AND package_name = '${safePkg}' ${majorWhere}
+         ORDER BY export_name`
+      ).then(r => Array.from(r)),
 
-const allUsages = [...filteredComponents, ...filteredFunctions];
+      db.query(
+        `SELECT DISTINCT project_id FROM project_snapshots WHERE is_latest = true ORDER BY project_id`
+      ).then(r => Array.from(r)),
+    ])
+  : [[], [], []];
+```
 
+```js
 const adopterIds = new Set([
   ...filteredComponents.map(d => d.project_id),
   ...filteredFunctions.map(d => d.project_id),
@@ -90,7 +123,7 @@ html`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px
 // Total usages per project
 const adoptionByProject = (() => {
   const counts = new Map();
-  for (const d of allUsages) {
+  for (const d of [...filteredComponents, ...filteredFunctions]) {
     counts.set(d.project_id, (counts.get(d.project_id) ?? 0) + 1);
   }
   return Array.from(counts.entries())
@@ -111,6 +144,8 @@ adoptionByProject.length > 0
           y: "project_id",
           sort: { y: "-x" },
           tip: true,
+          href: d => `/project-detail?project=${encodeURIComponent(d.project_id)}`,
+          target: "_self",
         }),
         Plot.ruleX([0]),
       ],
@@ -144,6 +179,8 @@ componentPopularity.length > 0
           y: "component_name",
           sort: { y: "-x" },
           tip: true,
+          href: d => `/component-explorer?package=${encodeURIComponent(packageFilter)}&component=${encodeURIComponent(d.component_name)}`,
+          target: "_self",
         }),
         Plot.ruleX([0]),
       ],
@@ -177,6 +214,8 @@ functionPopularity.length > 0
           y: "export_name",
           sort: { y: "-x" },
           tip: true,
+          href: d => `/function-explorer?package=${encodeURIComponent(packageFilter)}&function=${encodeURIComponent(d.export_name)}`,
+          target: "_self",
         }),
         Plot.ruleX([0]),
       ],
@@ -187,10 +226,9 @@ functionPopularity.length > 0
 ## Version spread per project
 
 ```js
-// Group by major.minor, count distinct projects
 const versionSpread = (() => {
   const buckets = new Map();
-  for (const d of allUsages) {
+  for (const d of [...filteredComponents, ...filteredFunctions]) {
     const label =
       d.package_version_major == null
         ? "unknown"
@@ -229,28 +267,31 @@ versionSpread.length === 0
 ## Usage over time
 
 ```js
-// Historical trend for the selected package (sum component + function counts per scanned_at)
-const trendData = (() => {
-  // Historical data has no version breakdown, so we show all versions regardless of the
-  // majorVersionFilter selection (filtering would incorrectly return zero rows).
-  const filtered = data.historicalUsages.filter(d => d.package_name === packageFilter);
-  // Aggregate per scanned_at across all projects
-  const byDate = new Map();
-  for (const d of filtered) {
-    const key = d.scanned_at;
-    const prev = byDate.get(key) ?? { scanned_at: key, total: 0, project_count: new Set() };
-    prev.total += (d.component_count ?? 0) + (d.function_count ?? 0);
-    prev.project_count.add(d.project_id);
-    byDate.set(key, prev);
-  }
-  return Array.from(byDate.values())
-    .map(({ scanned_at, total, project_count }) => ({
-      scanned_at: new Date(scanned_at),
-      total,
-      project_count: project_count.size,
-    }))
-    .sort((a, b) => a.scanned_at - b.scanned_at);
-})();
+// Historical trend for the selected package — all scans (not just is_latest).
+// COALESCE(code_at, scanned_at): for --history scans every commit shares the same scanned_at
+// but has a distinct code_at (the commit timestamp). For regular scans code_at may be NULL.
+const trendData = packageFilter
+  ? await db.query(
+      `SELECT DATE_TRUNC('day', scan_date::TIMESTAMP) AS scan_date,
+              (SUM(component_count) + SUM(function_count))::INTEGER AS total,
+              COUNT(DISTINCT project_id) AS project_count
+       FROM (
+         SELECT COALESCE(code_at, scanned_at) AS scan_date, project_id,
+                COUNT(*)::INTEGER AS component_count, 0::INTEGER AS function_count
+         FROM component_usages
+         WHERE package_name = '${safePkg}'
+         GROUP BY scan_date, project_id
+         UNION ALL
+         SELECT COALESCE(code_at, scanned_at) AS scan_date, project_id,
+                0::INTEGER AS component_count, COUNT(*)::INTEGER AS function_count
+         FROM function_usages
+         WHERE package_name = '${safePkg}'
+         GROUP BY scan_date, project_id
+       ) t
+       GROUP BY DATE_TRUNC('day', scan_date::TIMESTAMP)
+       ORDER BY scan_date`
+    ).then(r => Array.from(r).map(d => ({ ...d, scan_date: new Date(d.scan_date) })))
+  : [];
 ```
 
 ```js
@@ -260,8 +301,8 @@ trendData.length < 2
       x: { label: "scan date", type: "utc" },
       y: { label: "total usages", grid: true },
       marks: [
-        Plot.lineY(trendData, { x: "scanned_at", y: "total", tip: true }),
-        Plot.dotY(trendData, { x: "scanned_at", y: "total" }),
+        Plot.lineY(trendData, { x: "scan_date", y: "total", tip: true }),
+        Plot.dotY(trendData, { x: "scan_date", y: "total" }),
         Plot.ruleY([0]),
       ],
     })
@@ -272,7 +313,7 @@ trendData.length < 2
 _Projects with zero usage of **${packageFilter}**${majorVersionFilter !== "All" ? ` v${majorVersionFilter}` : ""}._
 
 ```js
-const nonAdopters = data.allProjects.filter(d => !adopterIds.has(d.project_id));
+const nonAdopters = allProjects.filter(d => !adopterIds.has(d.project_id));
 ```
 
 ```js
@@ -286,3 +327,4 @@ nonAdopters.length === 0
       },
     })
 ```
+

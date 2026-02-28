@@ -30,15 +30,13 @@ const allPackages = await db.query(
 ```
 
 ```js
-// Resolve selected package: URL param → dropdown fallback
+// Resolve selected package: pre-select URL param if present, always show input
 const urlPackage = new URLSearchParams(location.search).get("package");
-const selectedPackage = (urlPackage && allPackages.includes(urlPackage))
-  ? urlPackage
-  : view(
-      allPackages.length > 0
-        ? Inputs.select(allPackages, { label: "Package" })
-        : Inputs.text({ label: "Package", placeholder: "No function usage data", disabled: true })
-    );
+const selectedPackage = view(
+  allPackages.length > 0
+    ? Inputs.select(allPackages, { label: "Package", value: urlPackage && allPackages.includes(urlPackage) ? urlPackage : allPackages[0] })
+    : Inputs.text({ label: "Package", placeholder: "No function usage data", disabled: true })
+);
 ```
 
 ```js
@@ -54,15 +52,13 @@ const allFunctions = selectedPackage
 ```
 
 ```js
-// Resolve selected function: URL param → dropdown fallback
+// Resolve selected function: pre-select URL param if present, always show input
 const urlFunction = new URLSearchParams(location.search).get("function");
-const selectedFunction = (urlFunction && allFunctions.includes(urlFunction))
-  ? urlFunction
-  : view(
-      allFunctions.length > 0
-        ? Inputs.select(allFunctions, { label: "Function" })
-        : Inputs.text({ label: "Function", placeholder: "Select a package first", disabled: true })
-    );
+const selectedFunction = view(
+  allFunctions.length > 0
+    ? Inputs.select(allFunctions, { label: "Function", value: urlFunction && allFunctions.includes(urlFunction) ? urlFunction : allFunctions[0] })
+    : Inputs.text({ label: "Function", placeholder: "Select a package first", disabled: true })
+);
 ```
 
 ```js
