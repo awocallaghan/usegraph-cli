@@ -78,17 +78,16 @@ const allProjects = (selectedPackage && selectedFunction)
 ```js
 // Resolve selected project: URL param → dropdown fallback
 const urlProject = new URLSearchParams(location.search).get("project");
-const selectedProjectFilter = view(
-  allProjects.length > 0
-    ? Inputs.select(
-        ["All", ...allProjects],
-        {
-          label: "Project",
-          value: (urlProject && allProjects.includes(urlProject)) ? urlProject : "All",
-        }
-      )
-    : Inputs.text({ label: "Project", placeholder: "Select a function first", disabled: true })
-);
+const projectSelectEl = allProjects.length > 0
+  ? Inputs.select(
+      ["All", ...allProjects],
+      {
+        label: "Project",
+        value: (urlProject && allProjects.includes(urlProject)) ? urlProject : "All",
+      }
+    )
+  : Inputs.text({ label: "Project", placeholder: "Select a function first", disabled: true });
+const selectedProjectFilter = view(projectSelectEl);
 ```
 
 ```js
@@ -109,11 +108,10 @@ const argIndexOptions = ["All", ...allArgIndices.map(i => `Arg ${i}`)];
 
 ```js
 // Arg index dropdown (resets when function changes)
-const selectedArgLabel = view(
-  allArgIndices.length > 0
-    ? Inputs.select(argIndexOptions, { label: "Arg index" })
-    : Inputs.text({ label: "Arg index", placeholder: "Select a function first", disabled: true })
-);
+const argSelectEl = allArgIndices.length > 0
+  ? Inputs.select(argIndexOptions, { label: "Arg index" })
+  : Inputs.text({ label: "Arg index", placeholder: "Select a function first", disabled: true });
+const selectedArgLabel = view(argSelectEl);
 ```
 
 ```js
@@ -179,7 +177,7 @@ const fleetRows = (!selectedFunction && selectedPackage)
 // Run per-function queries in parallel once a function is selected
 const hasSelection = !!(selectedPackage && selectedFunction);
 
-const [projectRows, argPatternRows, topValuesRows] = hasSelection
+const [projectRows, argPatternRows] = hasSelection
   ? await Promise.all([
       // Projects using this function
       db.query(
@@ -198,18 +196,8 @@ const [projectRows, argPatternRows, topValuesRows] = hasSelection
          GROUP BY arg_index, value_type
          ORDER BY arg_index, n DESC`
       ).then(r => Array.from(r)),
-
-      // Top static values per arg_index
-      db.query(
-        `SELECT arg_index, value, COUNT(*)::INTEGER AS n
-         FROM function_arg_usages
-         WHERE ${argWhere} AND value_type = 'static' AND value IS NOT NULL
-         GROUP BY arg_index, value
-         ORDER BY arg_index, n DESC
-         LIMIT 100`
-      ).then(r => Array.from(r)),
     ])
-  : [[], [], []];
+  : [[], []];
 ```
 
 ```js
@@ -283,6 +271,18 @@ if (!hasSelection) {
         y: "project_id",
         sort: { y: "-x" },
         tip: true,
+        render: (index, scales, values, dimensions, context, next) => {
+          const g = next(index, scales, values, dimensions, context);
+          Array.from(g.querySelectorAll("rect")).forEach((rect, i) => {
+            const d = projectRows[index[i]];
+            rect.style.cursor = "pointer";
+            rect.addEventListener("click", () => {
+              projectSelectEl.value = d.project_id;
+              projectSelectEl.dispatchEvent(new Event("input", { bubbles: true }));
+            });
+          });
+          return g;
+        },
       }),
       Plot.ruleX([0]),
     ],
@@ -305,7 +305,7 @@ if (hasSelection && argPatternRows.length === 0) {
     Array.from(byArg, ([argIdx, rows]) => {
       const total = d3.sum(rows, d => d.n);
       return html`<div style="background:var(--theme-background-alt);border:1px solid var(--theme-foreground-faintest);border-radius:8px;padding:1rem">
-        <div style="font-weight:600;margin-bottom:0.5rem">Arg ${argIdx} <span style="font-size:0.75rem;color:var(--theme-foreground-muted)">(${total.toLocaleString()} calls)</span></div>
+        <div style="font-weight:600;margin-bottom:0.5rem"><span style="cursor:pointer;text-decoration:underline dotted" onclick=${() => { argSelectEl.value = `Arg ${argIdx}`; argSelectEl.dispatchEvent(new Event("input", { bubbles: true })); }}>Arg ${argIdx}</span> <span style="font-size:0.75rem;color:var(--theme-foreground-muted)">(${total.toLocaleString()} calls)</span></div>
         ${Plot.plot({
           height: 120,
           marginLeft: 80,
@@ -325,58 +325,59 @@ if (hasSelection && argPatternRows.length === 0) {
 
 ---
 
-## Top static values
+## All usages
 
 ```js
-if (hasSelection && topValuesRows.length === 0) {
-  display(html`<p style="color:var(--theme-foreground-muted)">No static values found for the current filters.</p>`);
-} else if (hasSelection) {
-  display(Inputs.table(topValuesRows, {
-    columns: ["arg_index", "value", "n"],
-    header: { arg_index: "Arg", value: "Value", n: "Count" },
-    sort: "n",
-    reverse: true,
-    format: {
-      arg_index: i => `Arg ${i}`,
-      value: v => v != null ? String(v).slice(0, 80) : "—",
-    },
-  }));
-}
+// All individual usage rows with current filters (max 500)
+const allUsageRows = hasSelection
+  ? await db.query(
+      `SELECT project_id, file_path, line, arg_index, arg_name, value_type, value
+       FROM function_arg_usages
+       WHERE ${argWhere}
+       ORDER BY project_id, file_path, line, arg_index
+       LIMIT 500`
+    ).then(r => Array.from(r))
+  : [];
 ```
 
----
-
-## Static vs dynamic ratio
-
 ```js
-if (hasSelection && argPatternRows.length > 0) {
-  // Totals per arg_index to pick top 20 by volume
-  const totals = d3.rollup(argPatternRows, v => d3.sum(v, d => d.n), d => d.arg_index);
-  const top20Args = Array.from(totals.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 20)
-    .map(([k]) => k);
-  const ratioRows = argPatternRows.filter(d => top20Args.includes(d.arg_index));
-
-  display(Plot.plot({
-    marginLeft: 80,
-    x: { label: "proportion", grid: false },
-    y: { label: "arg index" },
-    color: { legend: true, domain: ["static", "dynamic"], range: ["steelblue", "orange"] },
-    marks: [
-      Plot.barX(ratioRows, {
-        x: "n",
-        y: d => `Arg ${d.arg_index}`,
-        fill: "value_type",
-        sort: { y: "x", reverse: true },
-        tip: true,
-        offset: "normalize",
-      }),
-      Plot.ruleX([0, 1]),
-    ],
+if (!hasSelection) {
+  display(html`<p style="color:var(--theme-foreground-muted)">Select a package and function above to explore usage data.</p>`);
+} else if (allUsageRows.length === 0) {
+  display(html`<p style="color:var(--theme-foreground-muted)">No usages found for the current filters.</p>`);
+} else {
+  display(Inputs.table(allUsageRows, {
+    columns: ["project_id", "file_path", "line", "arg_index", "arg_name", "value_type", "value"],
+    header: {
+      project_id: "Project",
+      file_path:  "File",
+      line:       "Line",
+      arg_index:  "Arg",
+      arg_name:   "Name",
+      value_type: "Type",
+      value:      "Value",
+    },
+    format: {
+      project_id: v => {
+        const el = document.createElement("span");
+        el.textContent = v;
+        el.style.cssText = "cursor:pointer;color:var(--theme-blue);text-decoration:underline dotted";
+        el.title = `Filter to project: ${v}`;
+        el.onclick = () => { projectSelectEl.value = v; projectSelectEl.dispatchEvent(new Event("input", { bubbles: true })); };
+        return el;
+      },
+      arg_index: i => {
+        const el = document.createElement("span");
+        el.textContent = `Arg ${i}`;
+        el.style.cssText = "cursor:pointer;color:var(--theme-blue);text-decoration:underline dotted";
+        el.title = `Filter to Arg ${i}`;
+        el.onclick = () => { argSelectEl.value = `Arg ${i}`; argSelectEl.dispatchEvent(new Event("input", { bubbles: true })); };
+        return el;
+      },
+      arg_name:  n => n ?? "—",
+      value:     v => v != null ? String(v).slice(0, 60) : "—",
+    },
   }));
-} else if (hasSelection) {
-  display(html`<p style="color:var(--theme-foreground-muted)">No arg data to compute ratio.</p>`);
 }
 ```
 
@@ -385,6 +386,19 @@ if (hasSelection && argPatternRows.length > 0) {
 ## Source snippets
 
 <p style="color:var(--theme-foreground-muted);font-size:0.85rem">Shown when an arg index filter is active and source snippets are available (max 200).</p>
+
+```js
+// Build a code file URL when the project slug is a GitHub repo (github.com/owner/repo[/subpath])
+function buildFileUrl(projectId, filePath, line) {
+  const ghMatch = projectId.match(/^github\.com\/([^/]+\/[^/]+)(\/.*)?$/);
+  if (!ghMatch) return null;
+  const ownerRepo = ghMatch[1];
+  const subPath = ghMatch[2] ? ghMatch[2].slice(1) : null;
+  const cleanFile = filePath.replace(/^\//, "");
+  const fullPath = subPath ? `${subPath}/${cleanFile}` : cleanFile;
+  return `https://github.com/${ownerRepo}/blob/HEAD/${fullPath}${line != null ? `#L${line}` : ""}`;
+}
+```
 
 ```js
 if (!hasSelection) {
@@ -401,17 +415,21 @@ if (!hasSelection) {
       <summary style="font-weight:600;cursor:pointer;margin:1rem 0 0.5rem">
         <a href="/project-detail?project=${encodeURIComponent(projectId)}">${projectId}</a>
       </summary>
-      ${Array.from(byFile, ([filePath, fileRows]) => html`
+      ${Array.from(byFile, ([filePath, fileRows]) => {
+        const fileUrl = buildFileUrl(projectId, filePath, fileRows[0]?.line);
+        return html`
         <div style="margin:0.5rem 0 0.5rem 1rem">
-          <code style="font-size:0.8rem;color:var(--theme-foreground-muted)">${filePath}</code>
-          ${fileRows.map(r => html`
+          <code style="font-size:0.8rem;color:var(--theme-foreground-muted)">${fileUrl ? html`<a href="${fileUrl}" target="_blank" rel="noopener">${filePath}</a>` : filePath}</code>
+          ${fileRows.map(r => {
+            const lineUrl = buildFileUrl(projectId, filePath, r.line);
+            return html`
             <div style="margin:0.5rem 0">
-              <span style="font-size:0.75rem;color:var(--theme-foreground-muted)">line ${r.line} — <strong>Arg ${r.arg_index}</strong> (${r.value_type}${r.value != null ? ` = ${String(r.value).slice(0, 60)}` : ""})</span>
+              <span style="font-size:0.75rem;color:var(--theme-foreground-muted)">${lineUrl ? html`<a href="${lineUrl}" target="_blank" rel="noopener">line ${r.line}</a>` : `line ${r.line}`} — <strong>Arg ${r.arg_index}</strong> (${r.value_type}${r.value != null ? ` = ${String(r.value).slice(0, 60)}` : ""})</span>
               <pre style="background:var(--theme-background-alt);border:1px solid var(--theme-foreground-faintest);border-radius:6px;padding:0.75rem;font-size:0.75rem;overflow-x:auto;margin:0.25rem 0 0">${r.source_snippet}</pre>
             </div>
-          `)}
+          `})}
         </div>
-      `)}
+      `})}
     </details>`;
   })}</div>`);
 }
@@ -440,6 +458,14 @@ if (!hasSelection || !safeProj) {
       value:      "Value",
     },
     format: {
+      file_path: p => {
+        const url = buildFileUrl(selectedProjectFilter, p, null);
+        return url ? html`<a href="${url}" target="_blank" rel="noopener">${p}</a>` : p;
+      },
+      line: (l, d) => {
+        const url = buildFileUrl(selectedProjectFilter, d.file_path, l);
+        return url ? html`<a href="${url}" target="_blank" rel="noopener">${l}</a>` : l;
+      },
       arg_index: i => `Arg ${i}`,
       arg_name:  n => n ?? "—",
       value:     v => v != null ? String(v).slice(0, 60) : "—",

@@ -47,6 +47,17 @@ const FIXTURE_PROJECTS = [
   join(FIXTURES_ROOT, 'packages/utils'),
 ];
 
+// Fake GitHub remotes for each fixture project — enables GitHub code links in the dashboard.
+// project_id will be e.g. "github.com/test-org/web-app" once a remote is set.
+const FIXTURE_REMOTES = {
+  [join(FIXTURES_ROOT, 'apps/web-app')]:    'https://github.com/test-org/web-app.git',
+  [join(FIXTURES_ROOT, 'apps/dashboard')]:  'https://github.com/test-org/dashboard.git',
+  [join(FIXTURES_ROOT, 'apps/docs')]:       'https://github.com/test-org/docs.git',
+  [join(FIXTURES_ROOT, 'apps/mobile')]:     'https://github.com/test-org/mobile.git',
+  [join(FIXTURES_ROOT, 'packages/ui')]:     'https://github.com/test-org/acme-ui.git',
+  [join(FIXTURES_ROOT, 'packages/utils')]:  'https://github.com/test-org/acme-utils.git',
+};
+
 const DIST_CLI = resolve(__dirname, '..', 'dist', 'index.js');
 const TARGET_PACKAGES = '@acme/ui,@acme/utils';
 
@@ -55,10 +66,14 @@ const TARGET_PACKAGES = '@acme/ui,@acme/utils';
 before(async () => {
   // 0. Initialise ephemeral git repos for each fixture project (keeps main repo clean)
   for (const projectPath of FIXTURE_PROJECTS) {
-    await initTestRepo(projectPath, [
-      { message: 'initial commit' },
-      { message: 'second commit', files: { 'src/_gitmarker.ts': '// marker\n' } },
-    ]);
+    await initTestRepo(
+      projectPath,
+      [
+        { message: 'initial commit' },
+        { message: 'second commit', files: { 'src/_gitmarker.ts': '// marker\n' } },
+      ],
+      { remote: FIXTURE_REMOTES[projectPath] },
+    );
   }
 
   // 1. Scan each fixture project

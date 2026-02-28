@@ -116,6 +116,7 @@ if (!BUILD_ONLY) {
     git(destPath, ['init']);
     git(destPath, ['config', 'user.email', 'dev@dev.local']);
     git(destPath, ['config', 'user.name', 'Dev']);
+    git(destPath, ['remote', 'add', 'origin', `https://github.com/test-org/${name}.git`]);
     git(destPath, ['add', '.']);
     git(destPath, ['commit', '-m', 'initial commit', '--allow-empty'],
       { GIT_AUTHOR_DATE: date1, GIT_COMMITTER_DATE: date1 });

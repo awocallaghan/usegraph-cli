@@ -38,14 +38,20 @@ function git(cwd, args) {
  * @param {string} dir - Directory to initialise (must already exist with files).
  * @param {Array<{ message: string, files?: Record<string, string> }>} [commits]
  *   Commits to create. Defaults to a single "initial commit" that stages all files.
+ * @param {{ remote?: string }} [options]
+ *   Optional settings. `remote` sets the `origin` remote URL (e.g. a fake GitHub URL).
  * @returns {Promise<string[]>} Array of commit SHAs (one per commit).
  */
-export async function initTestRepo(dir, commits) {
+export async function initTestRepo(dir, commits, options) {
   const commitDefs = commits ?? [{ message: 'initial commit' }];
 
   git(dir, ['init']);
   git(dir, ['config', 'user.email', 'test@test.com']);
   git(dir, ['config', 'user.name', 'Test']);
+
+  if (options?.remote) {
+    git(dir, ['remote', 'add', 'origin', options.remote]);
+  }
 
   const shas = [];
 
