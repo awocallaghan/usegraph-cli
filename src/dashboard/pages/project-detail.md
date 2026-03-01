@@ -4,6 +4,8 @@ title: Project Detail
 
 # Project Detail
 
+<div id="pd-loading-indicator" style="display:flex;align-items:center;gap:10px;padding:1.25rem 0;color:var(--theme-foreground-muted)"><div style="flex-shrink:0;width:18px;height:18px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite"></div>Loading usage data…<style>@keyframes spin{to{transform:rotate(360deg)}}</style></div>
+
 ```js
 // Load project list for the selector (lightweight JSON)
 const meta = await FileAttachment("data/project_detail_meta.json").json();
@@ -19,6 +21,11 @@ const db = await DuckDBClient.of({
   component_usages:  FileAttachment("data/component_usages.parquet"),
   function_usages:   FileAttachment("data/function_usages.parquet"),
 });
+```
+
+```js
+// Remove loading indicator once DuckDB is ready
+{ void db; document.getElementById("pd-loading-indicator")?.remove(); }
 ```
 
 ```js

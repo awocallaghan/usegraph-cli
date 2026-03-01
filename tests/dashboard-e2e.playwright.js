@@ -264,6 +264,16 @@ test('function-explorer page loads DuckDB data successfully', async () => {
   assert.deepEqual(errors, [], `DuckDB failed to load on function-explorer:\n${errors.join('\n')}`);
 });
 
+test('package-adoption page loads DuckDB data successfully', async () => {
+  const errors = await checkDuckDbPageLoads('/package-adoption', '#pa-loading-indicator');
+  assert.deepEqual(errors, [], `DuckDB failed to load on package-adoption:\n${errors.join('\n')}`);
+});
+
+test('project-detail page loads DuckDB data successfully', async () => {
+  const errors = await checkDuckDbPageLoads('/project-detail', '#pd-loading-indicator');
+  assert.deepEqual(errors, [], `DuckDB failed to load on project-detail:\n${errors.join('\n')}`);
+});
+
 test('project-detail and index pages load without errors when Parquet lacks code_at (backward compat)', async () => {  // Simulate an old Parquet file by rewriting project_snapshots.parquet without the code_at column.
   // We use the DuckDB Node API (already a dependency) to do this in-process.
   const duckdb = (await import('duckdb')).default;
