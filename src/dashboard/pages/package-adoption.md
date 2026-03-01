@@ -7,17 +7,12 @@ title: Package Adoption
 <div id="pa-loading-indicator" style="display:flex;align-items:center;gap:10px;padding:1.25rem 0;color:var(--theme-foreground-muted)"><div style="flex-shrink:0;width:18px;height:18px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite"></div>Loading usage data…<style>@keyframes spin{to{transform:rotate(360deg)}}</style></div>
 
 ```js
-import { getDB } from "./components/db.js";
-```
-
-```js
-// Load usage and snapshot tables via DuckDB WASM (singleton: re-used if the
-// module cache survives navigation, e.g. with a future client-side router).
-const db = await getDB("package-adoption", () => DuckDBClient.of({
+// Load usage and snapshot tables via DuckDB WASM
+const db = await DuckDBClient.of({
   component_usages:  FileAttachment("data/component_usages.parquet"),
   function_usages:   FileAttachment("data/function_usages.parquet"),
   project_snapshots: FileAttachment("data/project_snapshots.parquet"),
-}));
+});
 ```
 
 ```js
