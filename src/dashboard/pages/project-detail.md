@@ -352,8 +352,8 @@ if (distinctDates.size < 2) {
         y: { label: "usages", grid: true },
         color: { legend: true },
         marks: [
-          Plot.lineY(trendRows, { x: "scanned_at", y: "count", stroke: "type", tip: true }),
-          Plot.dotY(trendRows,  { x: "scanned_at", y: "count", fill: "type" }),
+          Plot.lineY(trendRows, { x: "scanned_at", y: "count", stroke: "type", z: "type", tip: true }),
+          Plot.dotY(trendRows,  { x: "scanned_at", y: "count", fill: "type", z: "type" }),
           Plot.ruleY([0]),
         ],
       })
