@@ -15,12 +15,14 @@ const meta = await FileAttachment("data/project_detail_meta.json").json();
 // Initialise DuckDB WASM with all four parquet tables.
 // Optional tables (dependencies, component_usages, function_usages) always return
 // a valid (possibly empty) parquet from their data loader, so this never throws.
+const _dbStart = performance.now();
 const db = await DuckDBClient.of({
   project_snapshots: FileAttachment("data/project_snapshots.parquet"),
   dependencies:      FileAttachment("data/dependencies.parquet"),
   component_usages:  FileAttachment("data/component_usages.parquet"),
   function_usages:   FileAttachment("data/function_usages.parquet"),
 });
+console.log(`[usegraph] DuckDB init: ${Math.round(performance.now() - _dbStart)}ms`);
 ```
 
 ```js

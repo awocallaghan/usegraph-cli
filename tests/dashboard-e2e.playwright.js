@@ -18,14 +18,15 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, statSync, createReadStream, existsSync, copyFileSync, renameSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, statSync, createReadStream, existsSync, copyFileSync, renameSync } from 'node:fs';
 import { join, resolve, extname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { initTestRepo, cleanupTestRepo } from './helpers/git.js';
+import { initHistoricalRepo } from './helpers/git.js';
+import { ORG_HISTORY, MAX_HISTORY_DEPTH } from './fixtures/org-history.js';
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
@@ -34,16 +35,18 @@ const ROOT = resolve(__dirname, '..');
 const DIST_CLI = resolve(ROOT, 'dist', 'index.js');
 const DIST_DASHBOARD = resolve(ROOT, 'src', 'dashboard', 'dist');
 
-const FIXTURES_ROOT = resolve(__dirname, 'fixtures/org');
-const FIXTURE_PROJECTS = [
-  join(FIXTURES_ROOT, 'apps/web-app'),
-  join(FIXTURES_ROOT, 'apps/dashboard'),
-  join(FIXTURES_ROOT, 'apps/docs'),
-  join(FIXTURES_ROOT, 'apps/mobile'),
-  join(FIXTURES_ROOT, 'packages/ui'),
-  join(FIXTURES_ROOT, 'packages/utils'),
+const HISTORY_KEYS = [
+  'apps/web-app',
+  'apps/dashboard',
+  'apps/docs',
+  'apps/mobile',
+  'packages/ui',
+  'packages/utils',
 ];
 const TARGET_PACKAGES = '@acme/ui,@acme/utils';
+
+// Maximum ms from navigation to loading-indicator removal.
+const DUCKDB_LOAD_BUDGET_MS = 15_000;
 
 // ─── Temp USEGRAPH_HOME ───────────────────────────────────────────────────────
 
@@ -71,13 +74,18 @@ let browser;
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
+// Work dirs: temp copies initialized with full git history (populated in before())
+const WORK_PROJECTS = [];
+
 before(async () => {
-  // 0. Init ephemeral git repos so code_at is populated in scans
-  for (const projectPath of FIXTURE_PROJECTS) {
-    await initTestRepo(projectPath, [
-      { message: 'initial commit' },
-      { message: 'second commit', files: { 'src/_gitmarker.ts': '// marker\n' } },
-    ]);
+  // 0. Create temp work dirs and initialise full historical git repos
+  const workRoot = join(USEGRAPH_HOME, 'work');
+  for (const historyKey of HISTORY_KEYS) {
+    const history = ORG_HISTORY[historyKey];
+    const workDir = join(workRoot, historyKey);
+    mkdirSync(workDir, { recursive: true });
+    await initHistoricalRepo(workDir, history.commits, { remote: history.remote });
+    WORK_PROJECTS.push(workDir);
   }
 
   // 1. Compile TypeScript CLI (needed for scan + build steps)
@@ -90,14 +98,14 @@ before(async () => {
   }
 
   // 2. Scan fixture projects
-  for (const projectPath of FIXTURE_PROJECTS) {
+  for (const workPath of WORK_PROJECTS) {
     const result = spawnSync(
       process.execPath,
-      [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES],
+      [DIST_CLI, 'scan', workPath, '--packages', TARGET_PACKAGES, '--history', String(MAX_HISTORY_DEPTH)],
       { env: { ...process.env, USEGRAPH_HOME }, encoding: 'utf-8', timeout: 60_000 },
     );
     if (result.status !== 0) {
-      throw new Error(`Scan failed for ${projectPath}:\n${(result.stderr || result.stdout || '').slice(0, 500)}`);
+      throw new Error(`Scan failed for ${workPath}:\n${(result.stderr || result.stdout || '').slice(0, 500)}`);
     }
   }
 
@@ -181,10 +189,6 @@ after(async () => {
   await browser?.close();
   server?.close();
   try { rmSync(USEGRAPH_HOME, { recursive: true, force: true }); } catch { /* best-effort */ }
-  // Clean up ephemeral .git directories from fixture projects
-  for (const projectPath of FIXTURE_PROJECTS) {
-    cleanupTestRepo(projectPath);
-  }
 });
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
@@ -217,27 +221,36 @@ async function checkPageForErrors(path, waitMs = 5000) {
 
 /**
  * Navigate to a DuckDB-powered page, wait for the loading indicator to
- * disappear (meaning DuckDB finished its query), then return any JS errors and warnings.
+ * disappear (meaning DuckDB finished its query), then return any JS errors,
+ * warnings, timing logs, and total load time.
  *
  * @param {string} path  - URL path, e.g. '/component-explorer'
  * @param {string} loadingSelector - CSS selector for the element that must
  *   disappear once data has loaded. Defaults to the Observable error/loading
  *   placeholder rendered while a cell is pending.
+ * @returns {{ errors: string[], warnings: string[], timings: string[], loadMs: number }}
  */
 async function checkDuckDbPageLoads(path, loadingSelector = '.observablehq--loading') {
   const url = `http://127.0.0.1:${serverPort}${path}`;
   const page = await browser.newPage();
   const errors = [];
   const warnings = [];
+  const timings = [];
 
   page.on('pageerror', (err) => errors.push(`[pageerror] ${err.message}`));
   page.on('console', (msg) => {
+    const text = msg.text();
     if (msg.type() === 'error') {
-      errors.push(`[console.error] ${msg.text()}`);
+      errors.push(`[console.error] ${text}`);
     } else if (msg.type() === 'warning') {
-      warnings.push(`[console.warn] ${msg.text()}`);
+      warnings.push(`[console.warn] ${text}`);
+    } else if (text.startsWith('[usegraph]')) {
+      timings.push(text);
     }
   });
+
+  const t0 = Date.now();
+  let loadMs = -1;
 
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
@@ -246,87 +259,58 @@ async function checkDuckDbPageLoads(path, loadingSelector = '.observablehq--load
     // disappears the page has stalled (e.g. DuckDB failed to initialise).
     try {
       await page.waitForSelector(loadingSelector, { state: 'detached', timeout: 30_000 });
+      loadMs = Date.now() - t0;
     } catch {
-      errors.push(`[timeout] Loading indicator never disappeared on ${path} — DuckDB may have stalled`);
+      loadMs = Date.now() - t0;
+      errors.push(`[timeout] Loading indicator never disappeared on ${path} after ${loadMs}ms — DuckDB may have stalled`);
     }
   } finally {
     await page.close();
   }
 
-  return { errors, warnings };
+  return { errors, warnings, timings, loadMs };
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+// One test per page — each visit checks errors, warnings, DuckDB load, and
+// performance budget together, so every page is only loaded once.
 
-test('dashboard index page loads without runtime errors', async () => {
-  const { errors } = await checkPageForErrors('/index');
-  assert.deepEqual(errors, [], `Runtime errors on index page:\n${errors.join('\n')}`);
+test('index page: no errors or warnings', async () => {
+  const { errors, warnings } = await checkPageForErrors('/index');
+  assert.deepEqual(errors,   [], `Runtime errors on index:\n${errors.join('\n')}`);
+  assert.deepEqual(warnings, [], `Console warnings on index:\n${warnings.join('\n')}`);
 });
 
-test('project-detail page loads without runtime errors', async () => {
-  const { errors } = await checkPageForErrors('/project-detail');
-  assert.deepEqual(errors, [], `Runtime errors on project-detail page:\n${errors.join('\n')}`);
+test('component-explorer page: no errors, no warnings, loads within budget', async () => {
+  const { errors, warnings, timings, loadMs } = await checkDuckDbPageLoads('/component-explorer', '#comp-loading-indicator');
+  const info = timings.length ? `\n  Timings: ${timings.join(' | ')}` : '';
+  assert.deepEqual(errors,   [], `Errors on component-explorer:${info}\n${errors.join('\n')}`);
+  assert.deepEqual(warnings, [], `Warnings on component-explorer:\n${warnings.join('\n')}`);
+  assert.ok(loadMs <= DUCKDB_LOAD_BUDGET_MS, `component-explorer too slow: ${loadMs}ms > ${DUCKDB_LOAD_BUDGET_MS}ms${info}`);
 });
 
-test('component-explorer page loads without runtime errors', async () => {
-  const { errors } = await checkPageForErrors('/component-explorer');
-  assert.deepEqual(errors, [], `Runtime errors on component-explorer page:\n${errors.join('\n')}`);
+test('function-explorer page: no errors, no warnings, loads within budget', async () => {
+  const { errors, warnings, timings, loadMs } = await checkDuckDbPageLoads('/function-explorer', '#fn-loading-indicator');
+  const info = timings.length ? `\n  Timings: ${timings.join(' | ')}` : '';
+  assert.deepEqual(errors,   [], `Errors on function-explorer:${info}\n${errors.join('\n')}`);
+  assert.deepEqual(warnings, [], `Warnings on function-explorer:\n${warnings.join('\n')}`);
+  assert.ok(loadMs <= DUCKDB_LOAD_BUDGET_MS, `function-explorer too slow: ${loadMs}ms > ${DUCKDB_LOAD_BUDGET_MS}ms${info}`);
 });
 
-test('function-explorer page loads without runtime errors', async () => {
-  const { errors } = await checkPageForErrors('/function-explorer');
-  assert.deepEqual(errors, [], `Runtime errors on function-explorer page:\n${errors.join('\n')}`);
+test('package-adoption page: no errors, no warnings, loads within budget', async () => {
+  const { errors, warnings, timings, loadMs } = await checkDuckDbPageLoads('/package-adoption', '#pa-loading-indicator');
+  const info = timings.length ? `\n  Timings: ${timings.join(' | ')}` : '';
+  assert.deepEqual(errors,   [], `Errors on package-adoption:${info}\n${errors.join('\n')}`);
+  assert.deepEqual(warnings, [], `Warnings on package-adoption:\n${warnings.join('\n')}`);
+  assert.ok(loadMs <= DUCKDB_LOAD_BUDGET_MS, `package-adoption too slow: ${loadMs}ms > ${DUCKDB_LOAD_BUDGET_MS}ms${info}`);
 });
 
-// Warning checks: assert no console.warn output on any page.
-
-test('no console warnings on index page', async () => {
-  const { warnings } = await checkPageForErrors('/index');
-  assert.deepEqual(warnings, [], `Console warnings on index page:\n${warnings.join('\n')}`);
-});
-
-test('no console warnings on project-detail page', async () => {
-  const { warnings } = await checkDuckDbPageLoads('/project-detail', '#pd-loading-indicator');
-  assert.deepEqual(warnings, [], `Console warnings on project-detail page:\n${warnings.join('\n')}`);
-});
-
-test('no console warnings on component-explorer page', async () => {
-  const { warnings } = await checkDuckDbPageLoads('/component-explorer', '#comp-loading-indicator');
-  assert.deepEqual(warnings, [], `Console warnings on component-explorer page:\n${warnings.join('\n')}`);
-});
-
-test('no console warnings on function-explorer page', async () => {
-  const { warnings } = await checkDuckDbPageLoads('/function-explorer', '#fn-loading-indicator');
-  assert.deepEqual(warnings, [], `Console warnings on function-explorer page:\n${warnings.join('\n')}`);
-});
-
-test('no console warnings on package-adoption page', async () => {
-  const { warnings } = await checkDuckDbPageLoads('/package-adoption', '#pa-loading-indicator');
-  assert.deepEqual(warnings, [], `Console warnings on package-adoption page:\n${warnings.join('\n')}`);
-});
-
-// DuckDB data-loading tests: verify that the SharedWorker DuckDB engine
-// actually finishes loading and the loading indicator disappears.
-// These catch the "Loading usage data… forever" regression.
-
-test('component-explorer page loads DuckDB data successfully', async () => {
-  const { errors } = await checkDuckDbPageLoads('/component-explorer', '#comp-loading-indicator');
-  assert.deepEqual(errors, [], `DuckDB failed to load on component-explorer:\n${errors.join('\n')}`);
-});
-
-test('function-explorer page loads DuckDB data successfully', async () => {
-  const { errors } = await checkDuckDbPageLoads('/function-explorer', '#fn-loading-indicator');
-  assert.deepEqual(errors, [], `DuckDB failed to load on function-explorer:\n${errors.join('\n')}`);
-});
-
-test('package-adoption page loads DuckDB data successfully', async () => {
-  const { errors } = await checkDuckDbPageLoads('/package-adoption', '#pa-loading-indicator');
-  assert.deepEqual(errors, [], `DuckDB failed to load on package-adoption:\n${errors.join('\n')}`);
-});
-
-test('project-detail page loads DuckDB data successfully', async () => {
-  const { errors } = await checkDuckDbPageLoads('/project-detail', '#pd-loading-indicator');
-  assert.deepEqual(errors, [], `DuckDB failed to load on project-detail:\n${errors.join('\n')}`);
+test('project-detail page: no errors, no warnings, loads within budget', async () => {
+  const { errors, warnings, timings, loadMs } = await checkDuckDbPageLoads('/project-detail', '#pd-loading-indicator');
+  const info = timings.length ? `\n  Timings: ${timings.join(' | ')}` : '';
+  assert.deepEqual(errors,   [], `Errors on project-detail:${info}\n${errors.join('\n')}`);
+  assert.deepEqual(warnings, [], `Warnings on project-detail:\n${warnings.join('\n')}`);
+  assert.ok(loadMs <= DUCKDB_LOAD_BUDGET_MS, `project-detail too slow: ${loadMs}ms > ${DUCKDB_LOAD_BUDGET_MS}ms${info}`);
 });
 
 test('project-detail and index pages load without errors when Parquet lacks code_at (backward compat)', async () => {  // Simulate an old Parquet file by rewriting project_snapshots.parquet without the code_at column.

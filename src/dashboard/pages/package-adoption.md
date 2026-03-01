@@ -8,12 +8,14 @@ title: Package Adoption
 
 ```js
 // Load usage, snapshot, and dependency tables via DuckDB WASM
+const _dbStart = performance.now();
 const db = await DuckDBClient.of({
   component_usages:  FileAttachment("data/component_usages.parquet"),
   function_usages:   FileAttachment("data/function_usages.parquet"),
   project_snapshots: FileAttachment("data/project_snapshots.parquet"),
   dependencies:      FileAttachment("data/dependencies.parquet"),
 });
+console.log(`[usegraph] DuckDB init: ${Math.round(performance.now() - _dbStart)}ms`);
 ```
 
 ```js
@@ -22,6 +24,7 @@ const packages = await db.query(
   `SELECT DISTINCT package_name FROM dependencies WHERE is_latest = true
    ORDER BY package_name`
 ).then(r => Array.from(r).map(d => d.package_name));
+console.log(`[usegraph] package-adoption ready: ${Math.round(performance.now() - _dbStart)}ms total`);
 ```
 
 ```js

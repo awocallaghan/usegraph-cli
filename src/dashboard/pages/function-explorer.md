@@ -8,10 +8,12 @@ title: Function Explorer
 
 ```js
 // Load both parquet tables via DuckDB WASM
+const _dbStart = performance.now();
 const db = await DuckDBClient.of({
   function_usages:     FileAttachment("data/function_usages.parquet"),
   function_arg_usages: FileAttachment("data/function_arg_usages.parquet"),
 });
+console.log(`[usegraph] DuckDB init: ${Math.round(performance.now() - _dbStart)}ms`);
 ```
 
 ```js
@@ -19,6 +21,7 @@ const db = await DuckDBClient.of({
 const allPackages = await db.query(
   `SELECT DISTINCT package_name FROM function_usages WHERE is_latest = true ORDER BY package_name`
 ).then(r => Array.from(r).map(d => d.package_name));
+console.log(`[usegraph] function-explorer ready: ${Math.round(performance.now() - _dbStart)}ms total`);
 ```
 
 ```js
