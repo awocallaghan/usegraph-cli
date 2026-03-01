@@ -325,7 +325,11 @@ function buildAllRows(scans: ScanResult[], latestIds: Set<string>): AllRows {
 
     // ── dependencies ───────────────────────────────────────────────────────
     if (scan.meta?.dependencies) {
+      const internalPackages: string[] = (scan as { internalPackages?: string[] }).internalPackages ?? [];
       for (const dep of scan.meta.dependencies) {
+        const is_internal = internalPackages.some((pat) =>
+          pat.endsWith('/') ? dep.name.startsWith(pat) : dep.name === pat,
+        );
         deps.push({
           project_id,
           scanned_at,
@@ -340,7 +344,7 @@ function buildAllRows(scans: ScanResult[], latestIds: Set<string>): AllRows {
           version_prerelease: dep.versionPrerelease ?? null,
           version_is_prerelease: dep.versionIsPrerelease ?? null,
           dep_type: dep.section,
-          is_internal: false, // future: configurable org-scope heuristic
+          is_internal,
         });
       }
     }

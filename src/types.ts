@@ -142,6 +142,8 @@ export interface ScanResult {
   packageJson: Record<string, unknown> | null;
   /** Packages whose usage was tracked in detail */
   targetPackages: string[];
+  /** Package names (or prefixes ending with '/') marked as internal at scan time */
+  internalPackages: string[];
   fileCount: number;
   files: FileAnalysis[];
   summary: ScanSummary;
@@ -221,6 +223,8 @@ export interface ProjectMeta {
 export interface UsegraphConfig {
   /** Packages to analyse in detail */
   targetPackages: string[];
+  /** Package names (or prefixes ending with '/') that should be marked as internal in the dependencies table */
+  internalPackages: string[];
   /** Glob patterns for files to include (default: ts/tsx/js/jsx) */
   include: string[];
   /** Glob patterns for files to exclude */
