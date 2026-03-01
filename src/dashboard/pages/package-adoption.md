@@ -136,7 +136,13 @@ const adoptionByProject = (() => {
 ```
 
 ```js
-adoptionByProject.length > 0
+const hasTrackedUsages = adoptionByProject.some(d => d.usage_count > 0);
+```
+
+```js
+adoptionByProject.length === 0
+  ? html`<p style="color:var(--theme-foreground-muted)">No adoption data for <strong>${packageFilter}</strong>${majorVersionFilter !== "All" ? ` v${majorVersionFilter}` : ""}.</p>`
+  : hasTrackedUsages
   ? Plot.plot({
       marginLeft: 160,
       x: { label: "usages", grid: true },
@@ -153,7 +159,16 @@ adoptionByProject.length > 0
         Plot.ruleX([0]),
       ],
     })
-  : html`<p style="color:var(--theme-foreground-muted)">No adoption data for <strong>${packageFilter}</strong>${majorVersionFilter !== "All" ? ` v${majorVersionFilter}` : ""}.</p>`
+  : html`<div>
+      <p style="color:var(--theme-foreground-muted);margin-bottom:0.75rem">${adoptionByProject.length} project${adoptionByProject.length === 1 ? "" : "s"} declare <strong>${packageFilter}</strong> as a dependency. No detailed usage was tracked — add it to <code>targetPackages</code> to see component and function-level stats.</p>
+      ${Inputs.table(adoptionByProject, {
+        columns: ["project_id"],
+        header: { project_id: "Project" },
+        format: {
+          project_id: (d) => html`<a href="/project-detail?project=${encodeURIComponent(d)}">${d}</a>`,
+        },
+      })}
+    </div>`
 ```
 
 ## Component popularity
