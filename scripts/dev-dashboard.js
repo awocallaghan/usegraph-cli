@@ -2,12 +2,11 @@
 /**
  * dev-dashboard.js — quickly spin up the dashboard with fixture data
  *
- * Copies the 6 fixture projects into .dev-usegraph/fixtures/ (leaving the
- * originals untouched so e2e tests are never affected), then:
- *   1. Inits an ephemeral git repo with 2 commits in each copy
- *   2. Scans all 6 copies with --history 2 (skips already-scanned commits)
- *   3. Runs `usegraph build`
- *   4. Launches `usegraph dashboard`
+ * Initialises an ephemeral git repo with realistic 6-month history in each
+ * fixture copy (stored in .dev-usegraph/fixtures/), then:
+ *   1. Scans all 6 copies with --history <N> (skips already-scanned commits)
+ *   2. Runs `usegraph build`
+ *   3. Launches `usegraph dashboard`
  *
  * Data is stored in <repo-root>/.dev-usegraph/ so repeated runs are fast
  * (already-scanned commits are skipped, no redundant work).
@@ -20,9 +19,11 @@
  */
 
 import { spawnSync, spawn } from 'node:child_process';
-import { existsSync, rmSync, mkdirSync, cpSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ORG_HISTORY, MAX_HISTORY_DEPTH } from '../tests/fixtures/org-history.js';
+import { initHistoricalRepo } from '../tests/helpers/git.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
@@ -49,15 +50,6 @@ const BUILD_ONLY = args.includes('--build-only');
 const SCAN_ONLY  = args.includes('--scan-only');
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-function git(cwd, gitArgs, extraEnv = {}) {
-  const r = spawnSync('git', ['-C', cwd, ...gitArgs], {
-    encoding: 'utf-8',
-    env: { ...process.env, ...extraEnv },
-  });
-  if (r.error) throw r.error;
-  return r;
-}
 
 function run(label, ...cmdArgs) {
   process.stdout.write(`\n▶ ${label}\n`);
@@ -89,49 +81,35 @@ if (CLEAN) {
 // ── copy fixtures into .dev-usegraph/fixtures/ and init git repos ─────────────
 
 if (!BUILD_ONLY) {
-  console.log('\n── Setting up fixture copies (originals untouched) ───────────');
+  console.log('\n── Setting up fixture repos (6-month history) ────────────────');
 
   for (const srcPath of SOURCE_PROJECTS) {
     const subdir  = srcPath.includes('/apps/')      ? 'apps'     : 'packages';
     const name    = basename(srcPath);
     const destPath = join(DEV_FIXTURES, subdir, name);
     const shortName = `${subdir}/${name}`;
+    const historyKey = `${subdir}/${name}`;
+    const history = ORG_HISTORY[historyKey];
 
     if (existsSync(join(destPath, '.git'))) {
-      const log = git(destPath, ['log', '--oneline']).stdout.trim().split('\n').filter(Boolean);
-      console.log(`  ${shortName}: ${log.length} commit(s) already present in copy`);
+      const r = spawnSync('git', ['-C', destPath, 'log', '--oneline'], { encoding: 'utf-8' });
+      const count = r.stdout.trim().split('\n').filter(Boolean).length;
+      console.log(`  ${shortName}: ${count} commit(s) already present, skipping`);
       continue;
     }
 
-    process.stdout.write(`  ${shortName}: copying + initialising git repo … `);
-
-    // Copy source files (no .git in source, so this is always clean)
+    process.stdout.write(`  ${shortName}: building ${history.commits.length}-commit history … `);
     mkdirSync(destPath, { recursive: true });
-    cpSync(srcPath, destPath, { recursive: true });
-
-    // Init git with 2 commits 30 days apart so code_at differs for the history chart
-    const date1 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const date2 = new Date().toISOString();
-
-    git(destPath, ['init']);
-    git(destPath, ['config', 'user.email', 'dev@dev.local']);
-    git(destPath, ['config', 'user.name', 'Dev']);
-    git(destPath, ['remote', 'add', 'origin', `https://github.com/test-org/${name}.git`]);
-    git(destPath, ['add', '.']);
-    git(destPath, ['commit', '-m', 'initial commit', '--allow-empty'],
-      { GIT_AUTHOR_DATE: date1, GIT_COMMITTER_DATE: date1 });
-    git(destPath, ['commit', '-m', 'second commit', '--allow-empty'],
-      { GIT_AUTHOR_DATE: date2, GIT_COMMITTER_DATE: date2 });
-
-    const sha = git(destPath, ['rev-parse', '--short', 'HEAD']).stdout.trim();
+    await initHistoricalRepo(destPath, history.commits, { remote: history.remote });
+    const sha = spawnSync('git', ['-C', destPath, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf-8' }).stdout.trim();
     process.stdout.write(`done (HEAD ${sha})\n`);
   }
 }
 
-// ── scan each fixture copy with --history 2 ───────────────────────────────────
+// ── scan each fixture copy with --history MAX_HISTORY_DEPTH ──────────────────
 
 if (!BUILD_ONLY) {
-  console.log('\n── Scanning fixture copies (--history 2) ─────────────────────');
+  console.log(`\n── Scanning fixture repos (--history ${MAX_HISTORY_DEPTH}) ───────────────────`);
 
   for (const srcPath of SOURCE_PROJECTS) {
     const subdir   = srcPath.includes('/apps/') ? 'apps' : 'packages';
@@ -140,7 +118,7 @@ if (!BUILD_ONLY) {
       `scan ${subdir}/${basename(srcPath)}`,
       DIST_CLI, 'scan', destPath,
       '--packages', TARGET_PACKAGES,
-      '--history', '2',
+      '--history', String(MAX_HISTORY_DEPTH),
     );
   }
 }

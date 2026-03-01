@@ -15,12 +15,13 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { join, resolve, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { initTestRepo, cleanupTestRepo } from './helpers/git.js';
+import { initHistoricalRepo, cleanupTestRepo } from './helpers/git.js';
+import { ORG_HISTORY, MAX_HISTORY_DEPTH } from './fixtures/org-history.js';
 
 // ─── Step 1: set USEGRAPH_HOME before importing any dist modules ──────────────
 // In ESM, static imports are hoisted. We use dynamic import() below so that
@@ -38,6 +39,8 @@ const { callTool } = await import('../dist/commands/mcp.js');
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const FIXTURES_ROOT = resolve(__dirname, 'fixtures/org');
+
+// Source fixture projects (used as history key references, not scanned directly)
 const FIXTURE_PROJECTS = [
   join(FIXTURES_ROOT, 'apps/web-app'),
   join(FIXTURES_ROOT, 'apps/dashboard'),
@@ -47,16 +50,18 @@ const FIXTURE_PROJECTS = [
   join(FIXTURES_ROOT, 'packages/utils'),
 ];
 
-// Fake GitHub remotes for each fixture project — enables GitHub code links in the dashboard.
-// project_id will be e.g. "github.com/test-org/web-app" once a remote is set.
-const FIXTURE_REMOTES = {
-  [join(FIXTURES_ROOT, 'apps/web-app')]:    'https://github.com/test-org/web-app.git',
-  [join(FIXTURES_ROOT, 'apps/dashboard')]:  'https://github.com/test-org/dashboard.git',
-  [join(FIXTURES_ROOT, 'apps/docs')]:       'https://github.com/test-org/docs.git',
-  [join(FIXTURES_ROOT, 'apps/mobile')]:     'https://github.com/test-org/mobile.git',
-  [join(FIXTURES_ROOT, 'packages/ui')]:     'https://github.com/test-org/acme-ui.git',
-  [join(FIXTURES_ROOT, 'packages/utils')]:  'https://github.com/test-org/acme-utils.git',
+// Maps source path → history key (e.g. 'apps/web-app')
+const HISTORY_KEYS = {
+  [join(FIXTURES_ROOT, 'apps/web-app')]:    'apps/web-app',
+  [join(FIXTURES_ROOT, 'apps/dashboard')]:  'apps/dashboard',
+  [join(FIXTURES_ROOT, 'apps/docs')]:       'apps/docs',
+  [join(FIXTURES_ROOT, 'apps/mobile')]:     'apps/mobile',
+  [join(FIXTURES_ROOT, 'packages/ui')]:     'packages/ui',
+  [join(FIXTURES_ROOT, 'packages/utils')]:  'packages/utils',
 };
+
+// Work dirs: temp copies initialized with full git history (populated in before())
+const WORK_PROJECTS = [];
 
 const DIST_CLI = resolve(__dirname, '..', 'dist', 'index.js');
 const TARGET_PACKAGES = '@acme/ui,@acme/utils';
@@ -64,23 +69,22 @@ const TARGET_PACKAGES = '@acme/ui,@acme/utils';
 // ─── Setup / teardown ─────────────────────────────────────────────────────────
 
 before(async () => {
-  // 0. Initialise ephemeral git repos for each fixture project (keeps main repo clean)
-  for (const projectPath of FIXTURE_PROJECTS) {
-    await initTestRepo(
-      projectPath,
-      [
-        { message: 'initial commit' },
-        { message: 'second commit', files: { 'src/_gitmarker.ts': '// marker\n' } },
-      ],
-      { remote: FIXTURE_REMOTES[projectPath] },
-    );
+  // 0. Create temp work dirs and initialise full historical git repos
+  const workRoot = join(USEGRAPH_HOME, 'work');
+  for (const srcPath of FIXTURE_PROJECTS) {
+    const historyKey = HISTORY_KEYS[srcPath];
+    const history = ORG_HISTORY[historyKey];
+    const workDir = join(workRoot, historyKey);
+    mkdirSync(workDir, { recursive: true });
+    await initHistoricalRepo(workDir, history.commits, { remote: history.remote });
+    WORK_PROJECTS.push(workDir);
   }
 
-  // 1. Scan each fixture project
-  for (const projectPath of FIXTURE_PROJECTS) {
+  // 1. Scan each work project (latest commit only for the initial scan)
+  for (const workPath of WORK_PROJECTS) {
     const result = spawnSync(
       process.execPath,
-      [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES],
+      [DIST_CLI, 'scan', workPath, '--packages', TARGET_PACKAGES],
       {
         env: process.env, // USEGRAPH_HOME already set
         encoding: 'utf-8',
@@ -89,7 +93,7 @@ before(async () => {
     );
     if (result.status !== 0) {
       const err = (result.stderr || result.stdout || '').slice(0, 500);
-      throw new Error(`Scan failed for ${projectPath}:\n${err}`);
+      throw new Error(`Scan failed for ${workPath}:\n${err}`);
     }
   }
 
@@ -98,15 +102,11 @@ before(async () => {
 });
 
 after(() => {
-  // Clean up temp dir
+  // Clean up temp dir (includes work projects — their .git dirs are inside USEGRAPH_HOME)
   try {
     rmSync(USEGRAPH_HOME, { recursive: true, force: true });
   } catch {
     // Best-effort cleanup
-  }
-  // Remove ephemeral .git directories from fixture projects
-  for (const projectPath of FIXTURE_PROJECTS) {
-    cleanupTestRepo(projectPath);
   }
 });
 
@@ -323,7 +323,7 @@ test('scanned projects have codeAt set from git', async () => {
   const { createStorageBackend } = await import('../dist/storage/index.js');
   const { loadConfig } = await import('../dist/config.js');
 
-  const projectPath = FIXTURE_PROJECTS[0];
+  const projectPath = WORK_PROJECTS[0];
   const config = loadConfig(projectPath);
   const slug = computeProjectSlug(projectPath);
   const backend = createStorageBackend(projectPath, slug, {}, config);
@@ -336,14 +336,14 @@ test('scanned projects have codeAt set from git', async () => {
 });
 
 test('--history scans multiple commits and writes separate scan files', async () => {
-  const projectPath = FIXTURE_PROJECTS[0];
+  const projectPath = WORK_PROJECTS[0];
   const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
   const { createStorageBackend } = await import('../dist/storage/index.js');
   const { loadConfig } = await import('../dist/config.js');
 
   const result = spawnSync(
     process.execPath,
-    [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES, '--history', '2'],
+    [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES, '--history', String(MAX_HISTORY_DEPTH)],
     {
       env: process.env,
       encoding: 'utf-8',
@@ -356,12 +356,12 @@ test('--history scans multiple commits and writes separate scan files', async ()
   const slug = computeProjectSlug(projectPath);
   const backend = createStorageBackend(projectPath, slug, {}, config);
   const scanIds = backend.list();
-  assert.ok(scanIds.length >= 2, `Expected ≥2 scan files after --history 2, got ${scanIds.length}`);
+  assert.ok(scanIds.length >= 8, `Expected ≥8 scan files after --history ${MAX_HISTORY_DEPTH}, got ${scanIds.length}`);
 
   // Re-running --history should be idempotent (same files, no duplicates)
   const result2 = spawnSync(
     process.execPath,
-    [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES, '--history', '2'],
+    [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES, '--history', String(MAX_HISTORY_DEPTH)],
     {
       env: process.env,
       encoding: 'utf-8',
@@ -378,7 +378,7 @@ test('after --history build, Parquet has multiple rows and correct is_latest', a
   await runBuild({});
 
   const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
-  const projectPath = FIXTURE_PROJECTS[0];
+  const projectPath = WORK_PROJECTS[0];
   const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
   const slug = computeProjectSlug(projectPath);
 
@@ -390,9 +390,69 @@ test('after --history build, Parquet has multiple rows and correct is_latest', a
      ORDER BY code_at DESC NULLS LAST`
   );
 
-  assert.ok(rows.length >= 2, `Expected ≥2 snapshot rows for ${slug}, got ${rows.length}`);
+  assert.ok(rows.length >= 8, `Expected ≥8 snapshot rows for ${slug}, got ${rows.length}`);
   const latestRows = rows.filter(r => r.is_latest);
   assert.equal(latestRows.length, 1, 'Exactly one row should have is_latest = true');
   // The latest row should be first (most recent code_at)
   assert.ok(latestRows[0].code_at != null || latestRows[0].scanned_at != null, 'Latest row should have a timestamp');
+});
+
+// ─── History depth validation tests ──────────────────────────────────────────
+
+test('git history: web-app snapshots span at least 5 months', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const projectPath = WORK_PROJECTS[0];
+  const slug = computeProjectSlug(projectPath);
+
+  const p = requireParquet('project_snapshots');
+  const rows = await queryParquet(
+    `SELECT MIN(code_at) AS oldest, MAX(code_at) AS newest
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}'
+       AND code_at IS NOT NULL`
+  );
+
+  assert.ok(rows.length === 1 && rows[0].oldest && rows[0].newest,
+    'Expected code_at data for web-app');
+
+  const spanDays = (new Date(rows[0].newest) - new Date(rows[0].oldest)) / (1000 * 60 * 60 * 24);
+  assert.ok(
+    spanDays >= 150,
+    `Expected code_at to span ≥150 days, got ${Math.round(spanDays)} days (oldest: ${rows[0].oldest}, newest: ${rows[0].newest})`,
+  );
+});
+
+test('git history: all 6 projects have ≥5 snapshot rows after full history scan', async () => {
+  // Scan all remaining projects with full history (web-app was already scanned in the --history test)
+  for (const workPath of WORK_PROJECTS.slice(1)) {
+    const scanResult = spawnSync(
+      process.execPath,
+      [DIST_CLI, 'scan', workPath, '--packages', TARGET_PACKAGES, '--history', String(MAX_HISTORY_DEPTH)],
+      { env: process.env, encoding: 'utf-8', timeout: 120_000 },
+    );
+    assert.equal(scanResult.status, 0, `--history scan failed for ${workPath}:\n${scanResult.stderr || scanResult.stdout}`);
+  }
+
+  // Rebuild Parquet with all history scans included
+  await runBuild({});
+
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const p = requireParquet('project_snapshots');
+  for (const workPath of WORK_PROJECTS) {
+    const slug = computeProjectSlug(workPath);
+    const rows = await queryParquet(
+      `SELECT COUNT(*) AS cnt
+       FROM read_parquet('${p.replace(/'/g, "''")}')
+       WHERE project_id = '${slug.replace(/'/g, "''")}'`
+    );
+    const count = Number(rows[0].cnt);
+    assert.ok(
+      count >= 5,
+      `Expected ≥5 snapshot rows for ${slug}, got ${count}`,
+    );
+  }
 });
