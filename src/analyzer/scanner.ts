@@ -209,6 +209,7 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
     commitSha,
     packageJson: readPackageJson(projectPath),
     targetPackages,
+    internalPackages: config.internalPackages ?? [],
     fileCount: files.length,
     files: results,
     summary,

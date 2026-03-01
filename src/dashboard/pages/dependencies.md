@@ -15,7 +15,6 @@ html`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px
     ["Unique packages", new Set(deps.allDeps.map(d => d.package_name)).size],
     ["Total dep entries", deps.allDeps.length],
     ["Prerelease deps", deps.prereleaseExposure.length],
-    ["Internal packages", deps.internalPackages.length],
   ].map(([label, value]) =>
     html`<div style="background:var(--theme-background-alt);border:1px solid var(--theme-foreground-faintest);border-radius:8px;padding:1.25rem">
       <div style="font-size:2rem;font-weight:700;color:var(--theme-foreground-focus)">${value.toLocaleString()}</div>
@@ -41,15 +40,10 @@ const prereleaseOnly = view(Inputs.toggle({ label: "Prerelease only" }))
 ```
 
 ```js
-const internalOnly = view(Inputs.toggle({ label: "Internal only" }))
-```
-
-```js
 const filteredDeps = deps.allDeps.filter(d => {
   if (depTypeFilter !== "All" && d.dep_type !== depTypeFilter) return false;
   if (pkgSearch.trim() !== "" && !d.package_name.includes(pkgSearch.trim())) return false;
   if (prereleaseOnly && !d.version_is_prerelease) return false;
-  if (internalOnly && !d.is_internal) return false;
   return true;
 });
 ```
@@ -97,6 +91,10 @@ const selectedPkg = view(Inputs.select(
   filteredTopPackages.map(d => d.package_name),
   { label: "Package" }
 ))
+```
+
+```js
+html`<p><a href="/package-adoption?package=${encodeURIComponent(selectedPkg)}">View ${selectedPkg} on Package Adoption →</a></p>`
 ```
 
 ```js
@@ -189,27 +187,6 @@ deps.prereleaseExposure.length > 0
       },
     })
   : html`<p style="color:var(--theme-foreground-muted)">No prerelease dependencies found.</p>`
-```
-
-## Internal packages
-
-```js
-deps.internalPackages.length > 0
-  ? Plot.plot({
-      marginLeft: 200,
-      x: { label: "projects", grid: true },
-      y: { label: null },
-      marks: [
-        Plot.barX(deps.internalPackages, {
-          x: "project_count",
-          y: "package_name",
-          sort: { y: "-x" },
-          tip: true,
-        }),
-        Plot.ruleX([0]),
-      ],
-    })
-  : html`<p style="color:var(--theme-foreground-muted)">No internal packages found. Internal packages are detected automatically from workspace monorepo configurations.</p>`
 ```
 
 ## All dependencies

@@ -10,6 +10,7 @@ const CONFIG_FILENAMES = [
 
 export const DEFAULT_CONFIG: UsegraphConfig = {
   targetPackages: [],
+  internalPackages: [],
   include: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.mjs', '**/*.cjs'],
   exclude: [
     '**/node_modules/**',
@@ -51,6 +52,7 @@ export function loadConfig(projectPath: string): UsegraphConfig {
 function mergeConfig(defaults: UsegraphConfig, overrides: Partial<UsegraphConfig>): UsegraphConfig {
   return {
     targetPackages: overrides.targetPackages ?? defaults.targetPackages,
+    internalPackages: overrides.internalPackages ?? defaults.internalPackages,
     include: overrides.include ?? defaults.include,
     exclude: overrides.exclude ?? defaults.exclude,
     outputDir: overrides.outputDir ?? defaults.outputDir,

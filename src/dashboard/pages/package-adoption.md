@@ -34,9 +34,10 @@ const packages = await db.query(
 ```
 
 ```js
+const urlPackage = new URLSearchParams(location.search).get("package");
 const packageFilter = view(
   packages.length > 0
-    ? Inputs.select(packages, { label: "Package" })
+    ? Inputs.select(packages, { label: "Package", value: urlPackage && packages.includes(urlPackage) ? urlPackage : packages[0] })
     : Inputs.text({ label: "Package", placeholder: "No data — run usegraph scan first", disabled: true })
 )
 ```
