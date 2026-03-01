@@ -18,7 +18,7 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, createReadStream, existsSync, copyFileSync, renameSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, createReadStream, existsSync, copyFileSync, renameSync } from 'node:fs';
 import { join, resolve, extname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -142,8 +142,30 @@ before(async () => {
 
       const ext = extname(filePath) || '.html';
       const mime = MIME[ext] ?? 'application/octet-stream';
-      res.writeHead(200, { 'Content-Type': mime });
-      createReadStream(filePath).pipe(res);
+      const { size: fileSize } = statSync(filePath);
+
+      // Support HTTP Range requests so DuckDB WASM can fetch parquet files
+      // using efficient byte-range reads instead of falling back to full reads.
+      const rangeHeader = req.headers['range'];
+      if (rangeHeader) {
+        const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
+        const start = match[1] ? parseInt(match[1], 10) : 0;
+        const end   = match[2] ? parseInt(match[2], 10) : fileSize - 1;
+        res.writeHead(206, {
+          'Content-Type':  mime,
+          'Accept-Ranges': 'bytes',
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Content-Length': end - start + 1,
+        });
+        createReadStream(filePath, { start, end }).pipe(res);
+      } else {
+        res.writeHead(200, {
+          'Content-Type':  mime,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': fileSize,
+        });
+        createReadStream(filePath).pipe(res);
+      }
     });
     server.listen(0, '127.0.0.1', () => {
       serverPort = server.address().port;
@@ -171,11 +193,14 @@ async function checkPageForErrors(path, waitMs = 5000) {
   const url = `http://127.0.0.1:${serverPort}${path}`;
   const page = await browser.newPage();
   const errors = [];
+  const warnings = [];
 
   page.on('pageerror', (err) => errors.push(`[pageerror] ${err.message}`));
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
       errors.push(`[console.error] ${msg.text()}`);
+    } else if (msg.type() === 'warning') {
+      warnings.push(`[console.warn] ${msg.text()}`);
     }
   });
 
@@ -187,12 +212,12 @@ async function checkPageForErrors(path, waitMs = 5000) {
     await page.close();
   }
 
-  return errors;
+  return { errors, warnings };
 }
 
 /**
  * Navigate to a DuckDB-powered page, wait for the loading indicator to
- * disappear (meaning DuckDB finished its query), then return any JS errors.
+ * disappear (meaning DuckDB finished its query), then return any JS errors and warnings.
  *
  * @param {string} path  - URL path, e.g. '/component-explorer'
  * @param {string} loadingSelector - CSS selector for the element that must
@@ -203,11 +228,14 @@ async function checkDuckDbPageLoads(path, loadingSelector = '.observablehq--load
   const url = `http://127.0.0.1:${serverPort}${path}`;
   const page = await browser.newPage();
   const errors = [];
+  const warnings = [];
 
   page.on('pageerror', (err) => errors.push(`[pageerror] ${err.message}`));
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
       errors.push(`[console.error] ${msg.text()}`);
+    } else if (msg.type() === 'warning') {
+      warnings.push(`[console.warn] ${msg.text()}`);
     }
   });
 
@@ -225,29 +253,56 @@ async function checkDuckDbPageLoads(path, loadingSelector = '.observablehq--load
     await page.close();
   }
 
-  return errors;
+  return { errors, warnings };
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 test('dashboard index page loads without runtime errors', async () => {
-  const errors = await checkPageForErrors('/index');
+  const { errors } = await checkPageForErrors('/index');
   assert.deepEqual(errors, [], `Runtime errors on index page:\n${errors.join('\n')}`);
 });
 
 test('project-detail page loads without runtime errors', async () => {
-  const errors = await checkPageForErrors('/project-detail');
+  const { errors } = await checkPageForErrors('/project-detail');
   assert.deepEqual(errors, [], `Runtime errors on project-detail page:\n${errors.join('\n')}`);
 });
 
 test('component-explorer page loads without runtime errors', async () => {
-  const errors = await checkPageForErrors('/component-explorer');
+  const { errors } = await checkPageForErrors('/component-explorer');
   assert.deepEqual(errors, [], `Runtime errors on component-explorer page:\n${errors.join('\n')}`);
 });
 
 test('function-explorer page loads without runtime errors', async () => {
-  const errors = await checkPageForErrors('/function-explorer');
+  const { errors } = await checkPageForErrors('/function-explorer');
   assert.deepEqual(errors, [], `Runtime errors on function-explorer page:\n${errors.join('\n')}`);
+});
+
+// Warning checks: assert no console.warn output on any page.
+
+test('no console warnings on index page', async () => {
+  const { warnings } = await checkPageForErrors('/index');
+  assert.deepEqual(warnings, [], `Console warnings on index page:\n${warnings.join('\n')}`);
+});
+
+test('no console warnings on project-detail page', async () => {
+  const { warnings } = await checkDuckDbPageLoads('/project-detail', '#pd-loading-indicator');
+  assert.deepEqual(warnings, [], `Console warnings on project-detail page:\n${warnings.join('\n')}`);
+});
+
+test('no console warnings on component-explorer page', async () => {
+  const { warnings } = await checkDuckDbPageLoads('/component-explorer', '#comp-loading-indicator');
+  assert.deepEqual(warnings, [], `Console warnings on component-explorer page:\n${warnings.join('\n')}`);
+});
+
+test('no console warnings on function-explorer page', async () => {
+  const { warnings } = await checkDuckDbPageLoads('/function-explorer', '#fn-loading-indicator');
+  assert.deepEqual(warnings, [], `Console warnings on function-explorer page:\n${warnings.join('\n')}`);
+});
+
+test('no console warnings on package-adoption page', async () => {
+  const { warnings } = await checkDuckDbPageLoads('/package-adoption', '#pa-loading-indicator');
+  assert.deepEqual(warnings, [], `Console warnings on package-adoption page:\n${warnings.join('\n')}`);
 });
 
 // DuckDB data-loading tests: verify that the SharedWorker DuckDB engine
@@ -255,22 +310,22 @@ test('function-explorer page loads without runtime errors', async () => {
 // These catch the "Loading usage data… forever" regression.
 
 test('component-explorer page loads DuckDB data successfully', async () => {
-  const errors = await checkDuckDbPageLoads('/component-explorer', '#comp-loading-indicator');
+  const { errors } = await checkDuckDbPageLoads('/component-explorer', '#comp-loading-indicator');
   assert.deepEqual(errors, [], `DuckDB failed to load on component-explorer:\n${errors.join('\n')}`);
 });
 
 test('function-explorer page loads DuckDB data successfully', async () => {
-  const errors = await checkDuckDbPageLoads('/function-explorer', '#fn-loading-indicator');
+  const { errors } = await checkDuckDbPageLoads('/function-explorer', '#fn-loading-indicator');
   assert.deepEqual(errors, [], `DuckDB failed to load on function-explorer:\n${errors.join('\n')}`);
 });
 
 test('package-adoption page loads DuckDB data successfully', async () => {
-  const errors = await checkDuckDbPageLoads('/package-adoption', '#pa-loading-indicator');
+  const { errors } = await checkDuckDbPageLoads('/package-adoption', '#pa-loading-indicator');
   assert.deepEqual(errors, [], `DuckDB failed to load on package-adoption:\n${errors.join('\n')}`);
 });
 
 test('project-detail page loads DuckDB data successfully', async () => {
-  const errors = await checkDuckDbPageLoads('/project-detail', '#pd-loading-indicator');
+  const { errors } = await checkDuckDbPageLoads('/project-detail', '#pd-loading-indicator');
   assert.deepEqual(errors, [], `DuckDB failed to load on project-detail:\n${errors.join('\n')}`);
 });
 
@@ -316,8 +371,8 @@ test('project-detail and index pages load without errors when Parquet lacks code
     }
     // The static server already serves from DIST_DASHBOARD — no reassignment needed.
 
-    const indexErrors = await checkPageForErrors('/index');
-    const detailErrors = await checkPageForErrors('/project-detail');
+    const { errors: indexErrors } = await checkPageForErrors('/index');
+    const { errors: detailErrors } = await checkPageForErrors('/project-detail');
     assert.deepEqual(
       [...indexErrors, ...detailErrors],
       [],
