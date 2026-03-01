@@ -10,20 +10,15 @@ const meta = await FileAttachment("data/project_detail_meta.json").json();
 ```
 
 ```js
-import { getDB } from "./components/db.js";
-```
-
-```js
-// Initialise DuckDB WASM with all four parquet tables (singleton: re-used if
-// the module cache survives navigation, e.g. with a future client-side router).
-// Optional tables (dependencies, component_usages, function_usages) always
-// return a valid (possibly empty) parquet from their data loader.
-const db = await getDB("project-detail", () => DuckDBClient.of({
+// Initialise DuckDB WASM with all four parquet tables.
+// Optional tables (dependencies, component_usages, function_usages) always return
+// a valid (possibly empty) parquet from their data loader, so this never throws.
+const db = await DuckDBClient.of({
   project_snapshots: FileAttachment("data/project_snapshots.parquet"),
   dependencies:      FileAttachment("data/dependencies.parquet"),
   component_usages:  FileAttachment("data/component_usages.parquet"),
   function_usages:   FileAttachment("data/function_usages.parquet"),
-}));
+});
 ```
 
 ```js
