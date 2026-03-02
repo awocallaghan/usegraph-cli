@@ -320,6 +320,50 @@ trendData.length < 2
     })
 ```
 
+```js
+// Component and function usage counts per scan date across all historical scans
+const usageOverTime = packageFilter
+  ? await db.query(
+      `SELECT DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date,
+              COUNT(*)::INTEGER AS usage_count,
+              'components' AS type
+       FROM component_usages
+       WHERE package_name = '${safePkg}' ${usageVersionWhere}
+       GROUP BY scan_date
+       UNION ALL
+       SELECT DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date,
+              COUNT(*)::INTEGER AS usage_count,
+              'functions' AS type
+       FROM function_usages
+       WHERE package_name = '${safePkg}' ${usageVersionWhere}
+       GROUP BY scan_date
+       ORDER BY scan_date`
+    ).then(r => Array.from(r).map(d => ({ ...d, scan_date: new Date(d.scan_date) })))
+  : [];
+```
+
+```js
+{
+  const usageDates = new Set(usageOverTime.map(d => d.scan_date.toISOString()));
+  if (!usageOverTime.length) {
+    display(html`<p style="color:var(--theme-foreground-muted)">No component or function usage data for <strong>${packageFilter}</strong>. Add it to <code>targetPackages</code> in your config to track usages.</p>`);
+  } else if (usageDates.size < 2) {
+    display(html`<p style="color:var(--theme-foreground-muted)">Component and function usage over time requires multiple scans. Only ${usageDates.size} scan date${usageDates.size === 1 ? "" : "s"} found for <strong>${packageFilter}</strong>.</p>`);
+  } else {
+    display(Plot.plot({
+      x: { label: "scan date", type: "utc" },
+      y: { label: "usages", grid: true },
+      color: { legend: true },
+      marks: [
+        Plot.lineY(usageOverTime, { x: "scan_date", y: "usage_count", stroke: "type", z: "type", tip: true }),
+        Plot.dotY(usageOverTime,  { x: "scan_date", y: "usage_count", fill:   "type", z: "type" }),
+        Plot.ruleY([0]),
+      ],
+    }));
+  }
+}
+```
+
 ## Non-adopters
 
 _Projects that do **not** declare **${packageFilter}**${majorVersionFilter !== "All" ? ` v${majorVersionFilter}` : ""} as a dependency._
