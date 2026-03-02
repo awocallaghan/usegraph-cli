@@ -4,7 +4,7 @@
  *
  * Initialises an ephemeral git repo with realistic 6-month history in each
  * fixture copy (stored in .dev-usegraph/fixtures/), then:
- *   1. Scans all 6 copies with --history <N> (skips already-scanned commits)
+ *   1. Scans all 6 copies with --since 6m --interval 1m (skips already-scanned commits)
  *   2. Runs `usegraph build`
  *   3. Launches `usegraph dashboard`
  *
@@ -22,7 +22,7 @@ import { spawnSync, spawn } from 'node:child_process';
 import { existsSync, rmSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ORG_HISTORY, MAX_HISTORY_DEPTH } from '../tests/fixtures/org-history.js';
+import { ORG_HISTORY } from '../tests/fixtures/org-history.js';
 import { initHistoricalRepo } from '../tests/helpers/git.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -106,19 +106,21 @@ if (!BUILD_ONLY) {
   }
 }
 
-// ── scan each fixture copy with --history MAX_HISTORY_DEPTH ──────────────────
+// ── scan each fixture copy with --since 6m --interval 1m ─────────────────────
 
 if (!BUILD_ONLY) {
-  console.log(`\n── Scanning fixture repos (--history ${MAX_HISTORY_DEPTH}) ───────────────────`);
+  console.log('\n── Scanning fixture repos (--since 6m --interval 1m) ─────────────────');
 
   for (const srcPath of SOURCE_PROJECTS) {
     const subdir   = srcPath.includes('/apps/') ? 'apps' : 'packages';
-    const destPath = join(DEV_FIXTURES, subdir, basename(srcPath));
+    const name     = basename(srcPath);
+    const destPath = join(DEV_FIXTURES, subdir, name);
     run(
-      `scan ${subdir}/${basename(srcPath)}`,
+      `scan ${subdir}/${name}`,
       DIST_CLI, 'scan', destPath,
       '--packages', TARGET_PACKAGES,
-      '--history', String(MAX_HISTORY_DEPTH),
+      '--since', '6m',
+      '--interval', '1m',
     );
   }
 }

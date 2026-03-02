@@ -23,6 +23,12 @@ import { createStorageBackend } from '../storage/index.js';
 import { getScanIdForCommit } from '../storage.js';
 import type { StorageBackend } from '../storage/backend.js';
 import type { ScanResult, UsegraphConfig } from '../types.js';
+import {
+  parsePeriod,
+  resolveDate,
+  getCommitsInRange,
+  selectCheckpointCommits,
+} from '../git-history.js';
 
 export interface ScanCommandOptions {
   packages?: string;
@@ -32,6 +38,9 @@ export interface ScanCommandOptions {
   json?: boolean;
   force?: boolean;
   history?: string | boolean;
+  since?: string;
+  until?: string;
+  interval?: string;
 }
 
 export async function runScan(projectPathArg: string | undefined, opts: ScanCommandOptions): Promise<void> {
@@ -62,12 +71,30 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
   const backend = createStorageBackend(projectPath, projectSlug, opts, config);
   const cacheDir = backend.getCacheDir() ?? '';
 
-  // Check for --history mode
-  if (opts.history !== undefined) {
+  // Mode dispatch
+  const hasHistory  = opts.history  !== undefined;
+  const hasSince    = opts.since    !== undefined;
+  const hasInterval = opts.interval !== undefined;
+
+  if (hasHistory && (hasSince || hasInterval)) {
+    console.error(chalk.red('Error: --history cannot be combined with --since or --interval. Use one mode at a time.'));
+    process.exit(1);
+  }
+  if (hasInterval && !hasSince) {
+    console.error(chalk.red('Error: --interval requires --since to define a start boundary.'));
+    process.exit(1);
+  }
+
+  if (hasHistory) {
     const n = opts.history === true || opts.history === 'true'
       ? 10
       : (parseInt(String(opts.history), 10) || 10);
     await runHistoryScan(projectPath, n, opts, config, targetPackages, backend, cacheDir);
+    return;
+  }
+
+  if (hasSince) {
+    await runCheckpointScan(projectPath, opts, config, targetPackages, backend, cacheDir);
     return;
   }
 
@@ -273,5 +300,138 @@ async function runHistoryScan(
 
   console.log('');
   console.log(chalk.green(`✓ History scan complete: ${scanned} scanned, ${skipped} skipped`));
+  console.log(chalk.dim(`  Results saved to ${cacheDir}`));
+}
+
+// ─── Checkpoint scanning (--since / --until / --interval) ─────────────────────
+
+async function runCheckpointScan(
+  projectPath: string,
+  opts: ScanCommandOptions,
+  config: UsegraphConfig,
+  targetPackages: string[],
+  backend: StorageBackend,
+  cacheDir: string,
+): Promise<void> {
+  const projectSlug = computeProjectSlug(projectPath);
+  const now = new Date();
+
+  let sinceDate: Date;
+  try {
+    sinceDate = resolveDate(parsePeriod(opts.since!), now);
+  } catch (err) {
+    console.error(chalk.red(`Error: --since: ${err instanceof Error ? err.message : String(err)}`));
+    process.exit(1);
+  }
+
+  let untilDate: Date = now;
+  if (opts.until) {
+    try {
+      untilDate = resolveDate(parsePeriod(opts.until), now);
+    } catch (err) {
+      console.error(chalk.red(`Error: --until: ${err instanceof Error ? err.message : String(err)}`));
+      process.exit(1);
+    }
+  }
+
+  if (untilDate < sinceDate) {
+    console.error(chalk.red('Error: --until date is before --since date.'));
+    process.exit(1);
+  }
+
+  let intervalMs: number | undefined;
+  if (opts.interval) {
+    try {
+      const p = parsePeriod(opts.interval);
+      if (p.type !== 'relative') {
+        console.error(chalk.red('Error: --interval must be a relative period (e.g. 1m, 2w, 7d), not an absolute date.'));
+        process.exit(1);
+      }
+      intervalMs = p.ms;
+    } catch (err) {
+      console.error(chalk.red(`Error: --interval: ${err instanceof Error ? err.message : String(err)}`));
+      process.exit(1);
+    }
+  }
+
+  console.log(chalk.bold('usegraph scan --since' + (opts.interval ? ' --interval' : '')));
+  console.log(chalk.dim(`  Project:  ${projectPath}`));
+  console.log(chalk.dim(`  Since:    ${sinceDate.toISOString().slice(0, 10)}`));
+  console.log(chalk.dim(`  Until:    ${untilDate.toISOString().slice(0, 10)}`));
+  if (intervalMs !== undefined) {
+    console.log(chalk.dim(`  Interval: ${opts.interval}`));
+  }
+  console.log('');
+
+  let commits = getCommitsInRange(projectPath, sinceDate, untilDate, gitRawSync);
+
+  if (commits.length === 0) {
+    console.log(chalk.yellow('No commits found in the specified range.'));
+    return;
+  }
+
+  console.log(chalk.dim(`  Commits in range: ${commits.length}`));
+
+  if (intervalMs !== undefined) {
+    commits = selectCheckpointCommits(commits, sinceDate.getTime(), untilDate.getTime(), intervalMs);
+    console.log(chalk.dim(`  After sampling:   ${commits.length} checkpoint(s)`));
+  }
+
+  console.log('');
+
+  const total = commits.length;
+  let scanned = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < commits.length; i++) {
+    const commit = commits[i];
+    const shortSha = commit.sha.slice(0, 7);
+    const dateDisplay = ` (${commit.date.slice(0, 10)})`;
+
+    if (!opts.force) {
+      const existingId = getScanIdForCommit(cacheDir, commit.sha);
+      if (existingId) {
+        console.log(chalk.dim(`  [${i + 1}/${total}] Skipping ${shortSha}${dateDisplay} (already scanned)`));
+        skipped++;
+        continue;
+      }
+    }
+
+    console.log(chalk.dim(`  [${i + 1}/${total}] Scanning commit ${shortSha}${dateDisplay}`));
+
+    const tmpDir = mkdtempSync(join(tmpdir(), `usegraph-worktree-`));
+    try {
+      const worktreeResult = spawnSync('git', ['-C', projectPath, 'worktree', 'add', tmpDir, commit.sha], {
+        encoding: 'utf-8',
+      });
+      if (worktreeResult.error || worktreeResult.status !== 0) {
+        console.warn(chalk.yellow(`  Warning: Could not create worktree for ${shortSha}, skipping`));
+        continue;
+      }
+
+      const result: ScanResult = await scanProject({
+        projectPath: tmpDir,
+        targetPackages,
+        config,
+        cacheDir,
+        projectSlug,
+      });
+
+      result.isHistoricalScan = true;
+
+      backend.save(result);
+      scanned++;
+    } finally {
+      spawnSync('git', ['-C', projectPath, 'worktree', 'remove', tmpDir, '--force'], {
+        encoding: 'utf-8',
+      });
+      try {
+        rmSync(tmpDir, { recursive: true, force: true });
+      } catch { /* ignore */ }
+    }
+  }
+
+  console.log('');
+  console.log(chalk.green(`✓ Checkpoint scan complete: ${scanned} scanned, ${skipped} skipped`));
   console.log(chalk.dim(`  Results saved to ${cacheDir}`));
 }
