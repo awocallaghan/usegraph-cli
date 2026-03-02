@@ -45,6 +45,9 @@ export function createCli(): Command {
     .option('--json', 'Print raw JSON result to stdout instead of saving')
     .option('--force', 'Re-scan even if this commit was already scanned')
     .option('--history [n]', 'Scan the last N commits of git history (default: 10)')
+    .option('--since <period>', 'Start of range: relative (1y, 6m, 2w, 30d) or absolute ISO date (2024-01-01)')
+    .option('--until <period>', 'End of range (default: now); same format as --since')
+    .option('--interval <period>', 'Checkpoint interval — one commit sampled per bucket (e.g. 1m, 2w, 7d)')
     .action(async (path: string | undefined, opts) => {
       try {
         await runScan(path, opts);

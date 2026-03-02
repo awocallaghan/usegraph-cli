@@ -456,3 +456,133 @@ test('git history: all 6 projects have ≥5 snapshot rows after full history sca
     );
   }
 });
+
+// ─── --since / --interval checkpoint scan tests ───────────────────────────────
+
+test('--since/--interval scans checkpoint commits (downsampled)', async () => {
+  const projectPath = WORK_PROJECTS[0]; // web-app: 180-day history
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+  const { createStorageBackend } = await import('../dist/storage/index.js');
+  const { loadConfig } = await import('../dist/config.js');
+
+  // Count scans before to establish baseline
+  const config = loadConfig(projectPath);
+  const slug = computeProjectSlug(projectPath);
+  const backend = createStorageBackend(projectPath, slug, {}, config);
+  const beforeCount = backend.list().length;
+
+  const result = spawnSync(
+    process.execPath,
+    [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES, '--since', '6m', '--interval', '1m'],
+    { env: process.env, encoding: 'utf-8', timeout: 120_000 },
+  );
+  assert.equal(result.status, 0, `--since/--interval scan failed:\n${result.stderr || result.stdout}`);
+
+  const afterIds = backend.list();
+  const newScans = afterIds.length - beforeCount;
+
+  // The fixture has commits spread over ~180 days, so 6 monthly buckets should fire
+  // (some commits may already be scanned from --history tests; newScans may be 0)
+  // Assert that total scans is now in a reasonable range: 3–12 unique monthly checkpoints
+  assert.ok(
+    afterIds.length >= 3,
+    `Expected ≥3 scan files total after --since 6m --interval 1m, got ${afterIds.length}`,
+  );
+  assert.ok(
+    afterIds.length <= MAX_HISTORY_DEPTH + 10,
+    `Expected ≤${MAX_HISTORY_DEPTH + 10} total scans (downsampling should reduce count), got ${afterIds.length}`,
+  );
+
+  // Re-running should be idempotent
+  const result2 = spawnSync(
+    process.execPath,
+    [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES, '--since', '6m', '--interval', '1m'],
+    { env: process.env, encoding: 'utf-8', timeout: 120_000 },
+  );
+  assert.equal(result2.status, 0, 'Second --since/--interval scan should succeed');
+  const afterIds2 = backend.list();
+  assert.equal(afterIds2.length, afterIds.length, 'Re-running should be idempotent');
+});
+
+test('--since without --interval scans all commits in range', async () => {
+  const projectPath = WORK_PROJECTS[1]; // dashboard: also has 180-day history
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+  const { createStorageBackend } = await import('../dist/storage/index.js');
+  const { loadConfig } = await import('../dist/config.js');
+
+  const config = loadConfig(projectPath);
+  const slug = computeProjectSlug(projectPath);
+  const backend = createStorageBackend(projectPath, slug, {}, config);
+  const beforeCount = backend.list().length;
+
+  // Use a very short window (3d) — only the most recent commits qualify
+  const result = spawnSync(
+    process.execPath,
+    [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES, '--since', '3d'],
+    { env: process.env, encoding: 'utf-8', timeout: 60_000 },
+  );
+  assert.equal(result.status, 0, `--since range scan failed:\n${result.stderr || result.stdout}`);
+
+  // The fixture's newest commit is "today" (daysAgo(0)), so at least 1 commit qualifies
+  // (it may already be scanned; either way exit code must be 0)
+  const afterCount = backend.list().length;
+  assert.ok(afterCount >= beforeCount, 'Scan count should not decrease');
+});
+
+test('--history and --since conflict → exit code 1 with clear error', () => {
+  const projectPath = WORK_PROJECTS[0];
+
+  const result = spawnSync(
+    process.execPath,
+    [DIST_CLI, 'scan', projectPath, '--history', '5', '--since', '6m'],
+    { env: process.env, encoding: 'utf-8', timeout: 15_000 },
+  );
+  assert.equal(result.status, 1, `Expected exit code 1, got ${result.status}`);
+  const output = (result.stderr || '') + (result.stdout || '');
+  assert.ok(
+    output.includes('cannot be combined'),
+    `Expected "cannot be combined" in error output, got:\n${output.slice(0, 500)}`,
+  );
+});
+
+test('--interval without --since → exit code 1 with clear error', () => {
+  const projectPath = WORK_PROJECTS[0];
+
+  const result = spawnSync(
+    process.execPath,
+    [DIST_CLI, 'scan', projectPath, '--interval', '1m'],
+    { env: process.env, encoding: 'utf-8', timeout: 15_000 },
+  );
+  assert.equal(result.status, 1, `Expected exit code 1, got ${result.status}`);
+  const output = (result.stderr || '') + (result.stdout || '');
+  assert.ok(
+    output.includes('--interval requires --since'),
+    `Expected "--interval requires --since" in error output, got:\n${output.slice(0, 500)}`,
+  );
+});
+
+test('after checkpoint scan build, project_snapshots has rows across date range', async () => {
+  // Rebuild to include any newly added checkpoint scans
+  await runBuild({});
+
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const projectPath = WORK_PROJECTS[0];
+  const slug = computeProjectSlug(projectPath);
+  const p = requireParquet('project_snapshots');
+
+  const rows = await queryParquet(
+    `SELECT MIN(code_at) AS oldest, MAX(code_at) AS newest, COUNT(*) AS cnt
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}'
+       AND code_at IS NOT NULL`
+  );
+
+  assert.ok(rows.length === 1 && rows[0].oldest, 'Expected code_at data for web-app');
+  const spanDays = (new Date(rows[0].newest) - new Date(rows[0].oldest)) / (1000 * 60 * 60 * 24);
+  assert.ok(
+    spanDays >= 150,
+    `Expected code_at to span ≥150 days after checkpoint scan, got ${Math.round(spanDays)} days`,
+  );
+});
