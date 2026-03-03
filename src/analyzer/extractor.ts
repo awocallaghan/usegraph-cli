@@ -8,6 +8,7 @@
  *  - Member JSX:        <DS.Button variant="primary" />
  *  - Function calls:    createTheme({ ... })
  *  - Member calls:      DS.createTheme({ ... })
+ *  - Nested calls:      ui.api.fn({ ... }) (normalised to api.fn from the same package)
  */
 import { walkAst, type AstNode } from './walker.js';
 import type {
@@ -336,7 +337,6 @@ function resolveCallee(
   if (callee.type === 'MemberExpression') {
     const obj = callee['object'] as AstNode;
     const prop = callee['property'] as AstNode;
-    const objName = obj?.type === 'Identifier' ? (obj['value'] as string) : undefined;
     const propName =
       prop?.type === 'Identifier'
         ? (prop['value'] as string)
@@ -344,6 +344,7 @@ function resolveCallee(
           ? (prop['value'] as string)
           : undefined;
 
+    const objName = obj?.type === 'Identifier' ? (obj['value'] as string) : undefined;
     if (objName && propName) {
       // Namespace import: import * as DS from 'pkg' → DS.fn()
       const ns = namespaceMap.get(objName);
@@ -352,6 +353,29 @@ function resolveCallee(
       const importEntry = importMap.get(objName);
       if (importEntry) return { funcName: `${objName}.${propName}`, packageSource: importEntry.source };
     }
+
+    // Nested member call: ui.api.fn() where `ui` is a default/named import.
+    // Normalise to `api.fn` so it matches `api.fn()` from a named import of the same package.
+    if (obj?.type === 'MemberExpression' && propName) {
+      const innerObj = obj['object'] as AstNode;
+      const innerProp = obj['property'] as AstNode;
+      const innerObjName = innerObj?.type === 'Identifier' ? (innerObj['value'] as string) : undefined;
+      const innerPropName =
+        innerProp?.type === 'Identifier'
+          ? (innerProp['value'] as string)
+          : innerProp?.type === 'StringLiteral'
+            ? (innerProp['value'] as string)
+            : undefined;
+      if (innerObjName && innerPropName) {
+        // Default/named import: ui.api.fn() → funcName=api.fn, packageSource=pkg
+        const importEntry = importMap.get(innerObjName);
+        if (importEntry) return { funcName: `${innerPropName}.${propName}`, packageSource: importEntry.source };
+        // Namespace import: DS.api.fn() → funcName=DS.api.fn, packageSource=pkg
+        const ns = namespaceMap.get(innerObjName);
+        if (ns) return { funcName: `${innerObjName}.${innerPropName}.${propName}`, packageSource: ns };
+      }
+    }
+
     return { funcName: null, packageSource: null };
   }
 
