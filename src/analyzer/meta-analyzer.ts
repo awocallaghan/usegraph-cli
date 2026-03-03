@@ -9,6 +9,7 @@
  */
 import { existsSync, readFileSync } from 'fs';
 import { join, relative } from 'path';
+import fg from 'fast-glob';
 import type { DependencyEntry, ProjectMeta, ToolingMeta } from '../types.js';
 
 // Internal type — not exported; used by the legacy config-file detection table
@@ -228,6 +229,21 @@ function fileExists(projectPath: string, ...candidates: string[]): boolean {
   return candidates.some((c) => existsSync(join(projectPath, c)));
 }
 
+/**
+ * Returns true if any file matching the given glob patterns exists within the
+ * project directory (up to 3 levels deep, ignoring node_modules).
+ * Used to detect config files with non-standard names or in subdirectories.
+ */
+function globFileExists(projectPath: string, ...patterns: string[]): boolean {
+  return (
+    fg.sync(patterns, {
+      cwd: projectPath,
+      deep: 3,
+      ignore: ['**/node_modules/**'],
+    }).length > 0
+  );
+}
+
 function depVersion(deps: DependencyEntry[], name: string): string | null {
   return deps.find((d) => d.name === name)?.versionRange ?? null;
 }
@@ -255,6 +271,12 @@ function buildToolingMeta(
       'webpack.config.ts',
       'webpack.config.mjs',
       'webpack.config.cjs',
+    ) ||
+    globFileExists(
+      projectPath,
+      'webpack.config.*.{js,ts,mjs,cjs}',    // non-standard names at root (e.g. webpack.config.prod.js)
+      '**/webpack.config.{js,ts,mjs,cjs}',    // standard name in a subdirectory (e.g. frontend/webpack.config.js)
+      '**/webpack.config.*.{js,ts,mjs,cjs}',  // non-standard names in a subdirectory
     )
   )
     buildTool = 'webpack';
