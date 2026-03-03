@@ -512,3 +512,59 @@ test('git-aware scanning: same commit produces same id on re-scan', async () => 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ─── Webpack detection edge cases ─────────────────────────────────────────────
+
+test('webpack detected when config has non-standard name (e.g. webpack.config.prod.js)', async () => {
+  const root = join(tmpdir(), `usegraph-test-${randomUUID()}`);
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'my-app', devDependencies: { webpack: '^5.0.0' } }), 'utf-8');
+  writeFileSync(join(root, 'webpack.config.prod.js'), 'module.exports = {};', 'utf-8');
+  try {
+    const result = await scanProject({
+      projectPath: root,
+      targetPackages: [],
+      config: makeConfig(),
+    });
+    assert.equal(result.meta?.tooling.buildTool, 'webpack',
+      'webpack should be detected from webpack.config.prod.js');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('webpack detected when config is in a subdirectory (e.g. frontend/webpack.config.js)', async () => {
+  const root = join(tmpdir(), `usegraph-test-${randomUUID()}`);
+  mkdirSync(join(root, 'frontend'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'my-app', devDependencies: { webpack: '^5.0.0' } }), 'utf-8');
+  writeFileSync(join(root, 'frontend', 'webpack.config.js'), 'module.exports = {};', 'utf-8');
+  try {
+    const result = await scanProject({
+      projectPath: root,
+      targetPackages: [],
+      config: makeConfig(),
+    });
+    assert.equal(result.meta?.tooling.buildTool, 'webpack',
+      'webpack should be detected from frontend/webpack.config.js');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('webpack detected when config is non-standard name in a subdirectory (e.g. config/webpack.config.prod.js)', async () => {
+  const root = join(tmpdir(), `usegraph-test-${randomUUID()}`);
+  mkdirSync(join(root, 'config'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'my-app', devDependencies: { webpack: '^5.0.0' } }), 'utf-8');
+  writeFileSync(join(root, 'config', 'webpack.config.prod.js'), 'module.exports = {};', 'utf-8');
+  try {
+    const result = await scanProject({
+      projectPath: root,
+      targetPackages: [],
+      config: makeConfig(),
+    });
+    assert.equal(result.meta?.tooling.buildTool, 'webpack',
+      'webpack should be detected from config/webpack.config.prod.js');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
