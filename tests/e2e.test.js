@@ -561,6 +561,78 @@ test('--interval without --since → exit code 1 with clear error', () => {
   );
 });
 
+test('--since: inactive project (no commits in range) gets a baseline scan pinned to sinceDate', async () => {
+  // Create a fresh project whose only commit is 45 days in the past.
+  // When we scan with --since 7d the commit is outside the range, but we still
+  // expect a baseline scan with codeAt set to sinceDate (≈ now-7d).
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'usegraph-baseline-'));
+  try {
+    mkdirSync(tmpRoot, { recursive: true });
+
+    const commitDate = new Date(Date.now() - 45 * DAY_MS).toISOString();
+    await initHistoricalRepo(tmpRoot, [
+      {
+        date: commitDate,
+        message: 'initial commit (45 days ago)',
+        files: {
+          'package.json': JSON.stringify({ name: 'inactive-project', version: '1.0.0' }),
+          'src/index.ts': 'export const hello = "world";',
+        },
+      },
+    ]);
+
+    const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+    const { createStorageBackend } = await import('../dist/storage/index.js');
+    const { loadConfig } = await import('../dist/config.js');
+
+    const config = loadConfig(tmpRoot);
+    const slug = computeProjectSlug(tmpRoot);
+    const backend = createStorageBackend(tmpRoot, slug, {}, config);
+
+    const beforeCount = backend.list().length;
+    assert.equal(beforeCount, 0, 'No scans should exist before running --since');
+
+    const result = spawnSync(
+      process.execPath,
+      [DIST_CLI, 'scan', tmpRoot, '--packages', TARGET_PACKAGES, '--since', '7d'],
+      { env: process.env, encoding: 'utf-8', timeout: 60_000 },
+    );
+    assert.equal(result.status, 0,
+      `--since scan on inactive project failed:\n${result.stderr || result.stdout}`);
+
+    // Should have produced exactly 1 scan (the baseline commit)
+    const afterIds = backend.list();
+    assert.equal(afterIds.length, 1,
+      `Expected 1 baseline scan, got ${afterIds.length}: ${JSON.stringify(afterIds)}`);
+
+    // Load the scan result and verify codeAt is pinned to the sinceDate (~7 days ago)
+    const scan = backend.load(afterIds[0]);
+    assert.ok(scan !== null, 'Scan result should be loadable');
+    assert.ok(scan.codeAt !== null, 'codeAt should be set on the baseline scan');
+
+    const codeAtMs = new Date(scan.codeAt).getTime();
+    const sinceDateMs = Date.now() - 7 * DAY_MS;
+    // codeAt should be within 5 minutes of sinceDate (7 days ago), not 45 days ago
+    assert.ok(
+      Math.abs(codeAtMs - sinceDateMs) < 5 * 60 * 1000,
+      `Expected codeAt ≈ sinceDate (7d ago), got ${scan.codeAt}`,
+    );
+    assert.ok(scan.isHistoricalScan === true, 'Baseline scan should be marked as historical');
+
+    // Re-running should be idempotent (baseline already scanned)
+    const result2 = spawnSync(
+      process.execPath,
+      [DIST_CLI, 'scan', tmpRoot, '--packages', TARGET_PACKAGES, '--since', '7d'],
+      { env: process.env, encoding: 'utf-8', timeout: 60_000 },
+    );
+    assert.equal(result2.status, 0, 'Re-running --since on inactive project should succeed');
+    assert.equal(backend.list().length, 1, 'Re-running should not add duplicate scans');
+  } finally {
+    try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
 test('after checkpoint scan build, project_snapshots has rows across date range', async () => {
   // Rebuild to include any newly added checkpoint scans
   await runBuild({});

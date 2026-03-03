@@ -27,7 +27,9 @@ import {
   parsePeriod,
   resolveDate,
   getCommitsInRange,
+  getCommitAtOrBefore,
   selectCheckpointCommits,
+  type CommitEntry,
 } from '../git-history.js';
 
 export interface ScanCommandOptions {
@@ -365,28 +367,47 @@ async function runCheckpointScan(
 
   let commits = getCommitsInRange(projectPath, sinceDate, untilDate, gitRawSync);
 
-  if (commits.length === 0) {
+  // Find the latest commit at or before sinceDate so we always have a data
+  // point at the START of the requested period.  This prevents old, inactive
+  // projects from appearing as "new" projects when their only commits inside
+  // the range post-date the period start.
+  const rawBaseline = getCommitAtOrBefore(projectPath, sinceDate, gitRawSync);
+  const baselineNeeded = rawBaseline !== null &&
+    !commits.some(c => c.sha === rawBaseline.sha);
+
+  if (commits.length === 0 && !baselineNeeded) {
     console.log(chalk.yellow('No commits found in the specified range.'));
     return;
   }
 
-  console.log(chalk.dim(`  Commits in range: ${commits.length}`));
+  console.log(chalk.dim(`  Commits in range: ${commits.length}` +
+    (baselineNeeded ? ' (+1 baseline at period start)' : '')));
 
   if (intervalMs !== undefined) {
     commits = selectCheckpointCommits(commits, sinceDate.getTime(), untilDate.getTime(), intervalMs);
-    console.log(chalk.dim(`  After sampling:   ${commits.length} checkpoint(s)`));
+    console.log(chalk.dim(`  After sampling:   ${commits.length} checkpoint(s)` +
+      (baselineNeeded ? ' (+1 baseline at period start)' : '')));
   }
 
   console.log('');
 
-  const total = commits.length;
+  // Baseline is appended after in-range commits (it is the oldest entry)
+  type CommitWithOverride = CommitEntry & { overrideCodeAt?: string };
+  const allCommits: CommitWithOverride[] = [
+    ...commits,
+    ...(baselineNeeded ? [{ ...rawBaseline!, overrideCodeAt: sinceDate.toISOString() }] : []),
+  ];
+
+  const total = allCommits.length;
   let scanned = 0;
   let skipped = 0;
 
-  for (let i = 0; i < commits.length; i++) {
-    const commit = commits[i];
+  for (let i = 0; i < allCommits.length; i++) {
+    const commit = allCommits[i];
     const shortSha = commit.sha.slice(0, 7);
-    const dateDisplay = ` (${commit.date.slice(0, 10)})`;
+    const dateDisplay = commit.overrideCodeAt
+      ? ` (baseline at ${commit.overrideCodeAt.slice(0, 10)})`
+      : ` (${commit.date.slice(0, 10)})`;
 
     if (!opts.force) {
       const existingId = getScanIdForCommit(cacheDir, commit.sha);
@@ -418,6 +439,12 @@ async function runCheckpointScan(
       });
 
       result.isHistoricalScan = true;
+
+      // For the baseline commit, pin codeAt to sinceDate so data reflects
+      // the true state of the project at the start of the requested period.
+      if (commit.overrideCodeAt) {
+        result.codeAt = commit.overrideCodeAt;
+      }
 
       backend.save(result);
       scanned++;
