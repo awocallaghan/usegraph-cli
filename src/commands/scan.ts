@@ -372,24 +372,29 @@ async function runCheckpointScan(
   // projects from appearing as "new" projects when their only commits inside
   // the range post-date the period start.
   const rawBaseline = getCommitAtOrBefore(projectPath, sinceDate, gitRawSync);
-  const baselineNeeded = rawBaseline !== null &&
-    !commits.some(c => c.sha === rawBaseline.sha);
 
-  if (commits.length === 0 && !baselineNeeded) {
+  if (commits.length === 0 && rawBaseline === null) {
     console.log(chalk.yellow('No commits found in the specified range.'));
     return;
   }
 
   console.log(chalk.dim(`  Commits in range: ${commits.length}` +
-    (baselineNeeded ? ' (+1 baseline at period start)' : '')));
+    (rawBaseline !== null && !commits.some(c => c.sha === rawBaseline.sha) ? ' (+1 baseline at period start)' : '')));
 
   if (intervalMs !== undefined) {
     commits = selectCheckpointCommits(commits, sinceDate.getTime(), untilDate.getTime(), intervalMs);
+    // Recompute after sampling: the baseline may have been dropped from the sampled set
     console.log(chalk.dim(`  After sampling:   ${commits.length} checkpoint(s)` +
-      (baselineNeeded ? ' (+1 baseline at period start)' : '')));
+      (rawBaseline !== null && !commits.some(c => c.sha === rawBaseline.sha) ? ' (+1 baseline at period start)' : '')));
   }
 
   console.log('');
+
+  // Baseline needed if it exists and is not already represented in the (possibly sampled) commits.
+  // This check is intentionally done AFTER sampling so a baseline commit that was dropped
+  // during interval downsampling is still included in the final scan list.
+  const baselineNeeded = rawBaseline !== null &&
+    !commits.some(c => c.sha === rawBaseline.sha);
 
   // Baseline is appended after in-range commits (it is the oldest entry)
   type CommitWithOverride = CommitEntry & { overrideCodeAt?: string };
