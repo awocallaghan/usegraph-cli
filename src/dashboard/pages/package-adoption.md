@@ -292,15 +292,54 @@ versionSpread.length === 0
 ## Usage over time
 
 ```js
-// Historical adoption trend — count of distinct projects declaring this package per scan date.
-// COALESCE(code_at, scanned_at): for --history scans each commit has a distinct code_at.
+// Shared CTE fragment used by both "usage over time" queries below.
+// Builds the "last seen" lookup: for each timeline date (all distinct scan dates across all
+// projects) and each project, the most recent scan date on or before that timeline date.
+// This lets each chart carry forward a project's last known state between its scan dates,
+// preventing artificial dips when projects are not scanned on exactly the same days.
+const lastSeenCTEs = `
+  timeline AS (
+    SELECT DISTINCT DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS d
+    FROM project_snapshots
+  ),
+  project_scan_days AS (
+    SELECT DISTINCT
+      project_id,
+      DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date
+    FROM project_snapshots
+  ),
+  latest_scan_per_project AS (
+    SELECT
+      t.d AS timeline_date,
+      psd.project_id,
+      MAX(psd.scan_date) AS latest_scan
+    FROM timeline t
+    JOIN project_scan_days psd ON psd.scan_date <= t.d
+    GROUP BY t.d, psd.project_id
+  )`;
+```
+
+```js
+// Historical adoption trend — for each timeline date, count projects whose MOST RECENT scan
+// (up to that date) showed them declaring this package.
 const trendData = packageFilter
   ? await db.query(
-      `SELECT DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date,
-              COUNT(DISTINCT project_id)::INTEGER AS project_count
-       FROM dependencies
-       WHERE package_name = '${safePkg}'
-       GROUP BY DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP)
+      `WITH ${lastSeenCTEs},
+       pkg_present AS (
+         SELECT DISTINCT
+           project_id,
+           DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date
+         FROM dependencies
+         WHERE package_name = '${safePkg}'
+       )
+       SELECT
+         lspp.timeline_date AS scan_date,
+         COUNT(DISTINCT lspp.project_id)::INTEGER AS project_count
+       FROM latest_scan_per_project lspp
+       JOIN pkg_present pp
+         ON pp.project_id = lspp.project_id
+         AND pp.scan_date = lspp.latest_scan
+       GROUP BY lspp.timeline_date
        ORDER BY scan_date`
     ).then(r => Array.from(r).map(d => ({ ...d, scan_date: new Date(d.scan_date) })))
   : [];
@@ -321,22 +360,49 @@ trendData.length < 2
 ```
 
 ```js
-// Component and function usage counts per scan date across all historical scans
+// Component and function usage counts per timeline date, using the "last seen" approach:
+// for each project, carry forward its most recent usage count until a newer scan is available.
+// This prevents dips caused by misaligned scan dates across projects.
 const usageOverTime = packageFilter
   ? await db.query(
-      `SELECT DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date,
-              COUNT(*)::INTEGER AS usage_count,
-              'components' AS type
-       FROM component_usages
-       WHERE package_name = '${safePkg}' ${usageVersionWhere}
-       GROUP BY scan_date
+      `WITH ${lastSeenCTEs},
+       component_counts AS (
+         SELECT
+           project_id,
+           DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date,
+           COUNT(*) AS cnt
+         FROM component_usages
+         WHERE package_name = '${safePkg}' ${usageVersionWhere}
+         GROUP BY project_id, scan_date
+       ),
+       function_counts AS (
+         SELECT
+           project_id,
+           DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date,
+           COUNT(*) AS cnt
+         FROM function_usages
+         WHERE package_name = '${safePkg}' ${usageVersionWhere}
+         GROUP BY project_id, scan_date
+       )
+       SELECT
+         lspp.timeline_date AS scan_date,
+         SUM(cc.cnt)::INTEGER AS usage_count,
+         'components' AS type
+       FROM latest_scan_per_project lspp
+       JOIN component_counts cc
+         ON cc.project_id = lspp.project_id
+         AND cc.scan_date = lspp.latest_scan
+       GROUP BY lspp.timeline_date
        UNION ALL
-       SELECT DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date,
-              COUNT(*)::INTEGER AS usage_count,
-              'functions' AS type
-       FROM function_usages
-       WHERE package_name = '${safePkg}' ${usageVersionWhere}
-       GROUP BY scan_date
+       SELECT
+         lspp.timeline_date AS scan_date,
+         SUM(fc.cnt)::INTEGER AS usage_count,
+         'functions' AS type
+       FROM latest_scan_per_project lspp
+       JOIN function_counts fc
+         ON fc.project_id = lspp.project_id
+         AND fc.scan_date = lspp.latest_scan
+       GROUP BY lspp.timeline_date
        ORDER BY scan_date`
     ).then(r => Array.from(r).map(d => ({ ...d, scan_date: new Date(d.scan_date) })))
   : [];
