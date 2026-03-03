@@ -19,9 +19,16 @@ console.log(`[usegraph] DuckDB init: ${Math.round(performance.now() - _dbStart)}
 ```
 
 ```js
-// Build distinct package list from the dependencies table (all packages across all scanned projects)
+// Build distinct package list from found imports (component/function usages) and declared dependencies.
+// This ensures subpath exports (e.g. @acme/ui/rc) appear alongside top-level packages.
 const packages = await db.query(
-  `SELECT DISTINCT package_name FROM dependencies WHERE is_latest = true
+  `SELECT DISTINCT package_name FROM (
+     SELECT package_name FROM dependencies WHERE is_latest = true
+     UNION
+     SELECT package_name FROM component_usages WHERE is_latest = true
+     UNION
+     SELECT package_name FROM function_usages WHERE is_latest = true
+   )
    ORDER BY package_name`
 ).then(r => Array.from(r).map(d => d.package_name));
 console.log(`[usegraph] package-adoption ready: ${Math.round(performance.now() - _dbStart)}ms total`);
@@ -103,7 +110,13 @@ const [filteredDeps, filteredComponents, filteredFunctions, allProjects] = packa
 ```
 
 ```js
-const adopterIds = new Set(filteredDeps.map(d => d.project_id));
+// A project is considered an adopter if it declares the package as a dependency OR
+// has tracked component/function usages from it (covers subpath imports like @acme/ui/rc).
+const adopterIds = new Set([
+  ...filteredDeps.map(d => d.project_id),
+  ...filteredComponents.map(d => d.project_id),
+  ...filteredFunctions.map(d => d.project_id),
+]);
 ```
 
 ```js
