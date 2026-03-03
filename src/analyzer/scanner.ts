@@ -11,7 +11,7 @@ import { existsSync, readFileSync, statSync } from 'fs';
 import { basename, join } from 'path';
 import { spawnSync } from 'child_process';
 import { analyzeFile } from './file-analyzer.js';
-import { analyzeProjectMeta } from './meta-analyzer.js';
+import { analyzeProjectMeta, findPackageRoot, findLockfileDir } from './meta-analyzer.js';
 import {
   npmLockfileParser,
   pnpmLockfileParser,
@@ -83,13 +83,24 @@ function readPackageJson(projectPath: string): Record<string, unknown> | null {
 }
 
 /**
- * Detect the lockfile present in `projectPath` and parse it into a resolved
- * version map.  Priority order mirrors meta-analyzer's packageManager detection:
- * pnpm > bun (no lockfile parser yet) > yarn > npm.
+ * Detect the lockfile for `projectPath` and parse it into a resolved version map.
+ *
+ * Resolution order (handles subdirectories and monorepos):
+ *   1. `findPackageRoot(projectPath)` — resolves the package directory (may be
+ *      a subdirectory, e.g. `frontend/`, when no `package.json` is at root).
+ *   2. `findLockfileDir(packageRoot)` — walks up the tree from the package root
+ *      to locate a lockfile (handles monorepo subpackages whose lockfile lives
+ *      in the workspace root rather than the package directory).
+ *
+ * Priority within a lockfile directory mirrors meta-analyzer's packageManager
+ * detection: pnpm > bun (no parser yet) > yarn > npm.
  *
  * Returns an empty map when no supported lockfile is found or parsing fails.
  */
 function detectAndParseLockfile(projectPath: string): Map<string, ResolvedDependency> {
+  const packageRoot = findPackageRoot(projectPath);
+  const lockfileDir = findLockfileDir(packageRoot);
+
   const candidates: Array<{ file: string; parse: (content: string) => Map<string, ResolvedDependency> }> = [
     {
       file: 'pnpm-lock.yaml',
@@ -109,7 +120,7 @@ function detectAndParseLockfile(projectPath: string): Map<string, ResolvedDepend
   ];
 
   for (const { file, parse } of candidates) {
-    const lockPath = join(projectPath, file);
+    const lockPath = join(lockfileDir, file);
     if (!existsSync(lockPath)) continue;
     try {
       const content = readFileSync(lockPath, 'utf-8');

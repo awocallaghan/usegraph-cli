@@ -16,9 +16,10 @@
 import { test, after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 import { scanProject } from '../dist/analyzer/index.js';
 import { saveScanResult, loadLatestScanResult, loadFileCache } from '../dist/storage.js';
@@ -567,4 +568,186 @@ test('webpack detected when config is non-standard name in a subdirectory (e.g. 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// ─── Subdirectory package.json / lockfile detection ───────────────────────────
+
+test('package manager detected when package.json and lockfile are in a subdirectory (frontend/)', async () => {
+  const root = join(tmpdir(), `usegraph-test-${randomUUID()}`);
+  const frontend = join(root, 'frontend');
+  mkdirSync(join(frontend, 'src'), { recursive: true });
+  writeFileSync(join(frontend, 'package.json'), JSON.stringify({
+    name: 'my-frontend',
+    dependencies: { '@myds/button': '^1.0.0', react: '^18.2.0' },
+  }), 'utf-8');
+  writeFileSync(join(frontend, 'yarn.lock'), '# yarn lockfile v1\n\n"react@^18.2.0":\n  version "18.2.0"\n  resolved "https://registry.npmjs.org/react/-/react-18.2.0.tgz"\n  integrity sha512-stub\n', 'utf-8');
+  writeFileSync(join(frontend, 'src', 'App.tsx'), APP_TSX, 'utf-8');
+  try {
+    const result = await scanProject({
+      projectPath: root,
+      targetPackages: ['@myds/button'],
+      config: makeConfig(),
+    });
+    assert.equal(result.meta?.tooling.packageManager, 'yarn',
+      'should detect yarn from frontend/yarn.lock');
+    assert.ok(result.meta?.packageName === 'my-frontend',
+      'should read package name from frontend/package.json');
+    const reactDep = result.meta?.dependencies.find(d => d.name === 'react');
+    assert.ok(reactDep, 'should list react dependency from frontend/package.json');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('lockfile versions resolved when lockfile is in parent directory (monorepo subpackage)', async () => {
+  // Simulate a monorepo where the lockfile lives at the workspace root
+  // but the scan is run against a subpackage directory.
+  const root = join(tmpdir(), `usegraph-test-${randomUUID()}`);
+  const pkg = join(root, 'packages', 'ui');
+  mkdirSync(join(pkg, 'src'), { recursive: true });
+  // Workspace root: pnpm lockfile with resolved react version
+  writeFileSync(join(root, 'pnpm-lock.yaml'), `\
+lockfileVersion: '9.0'
+
+importers:
+  packages/ui:
+    dependencies:
+      react:
+        specifier: ^18.2.0
+        version: 18.2.0
+
+packages:
+
+  'react@18.2.0':
+    resolution: {integrity: sha512-stub}
+    engines: {node: '>=0.10.0'}
+`, 'utf-8');
+  // Subpackage: its own package.json (no lockfile here)
+  writeFileSync(join(pkg, 'package.json'), JSON.stringify({
+    name: '@acme/ui',
+    version: '1.0.0',
+    dependencies: { react: '^18.2.0' },
+  }), 'utf-8');
+  writeFileSync(join(pkg, 'src', 'App.tsx'), APP_TSX, 'utf-8');
+  try {
+    const result = await scanProject({
+      projectPath: pkg,
+      targetPackages: ['@myds/button'],
+      config: makeConfig(),
+    });
+    assert.equal(result.meta?.tooling.packageManager, 'pnpm',
+      'should detect pnpm from workspace root pnpm-lock.yaml');
+    const reactDep = result.meta?.dependencies.find(d => d.name === 'react');
+    assert.ok(reactDep, 'should have react dependency');
+    assert.equal(reactDep.versionResolved, '18.2.0',
+      'should resolve react version from workspace root lockfile');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('package manager detected when package.json is in subdirectory and lockfile is also in subdirectory (npm)', async () => {
+  const root = join(tmpdir(), `usegraph-test-${randomUUID()}`);
+  const frontend = join(root, 'client');
+  mkdirSync(join(frontend, 'src'), { recursive: true });
+  writeFileSync(join(frontend, 'package.json'), JSON.stringify({
+    name: 'my-client',
+    dependencies: { react: '^18.2.0' },
+  }), 'utf-8');
+  writeFileSync(join(frontend, 'package-lock.json'), JSON.stringify({
+    name: 'my-client',
+    version: '1.0.0',
+    lockfileVersion: 2,
+    packages: {
+      'node_modules/react': { version: '18.2.0' },
+    },
+  }), 'utf-8');
+  writeFileSync(join(frontend, 'src', 'index.ts'), OTHER_TS, 'utf-8');
+  try {
+    const result = await scanProject({
+      projectPath: root,
+      targetPackages: [],
+      config: makeConfig(),
+    });
+    assert.equal(result.meta?.tooling.packageManager, 'npm',
+      'should detect npm from client/package-lock.json');
+    const reactDep = result.meta?.dependencies.find(d => d.name === 'react');
+    assert.ok(reactDep, 'should list react dependency from client/package.json');
+    assert.equal(reactDep.versionResolved, '18.2.0',
+      'should resolve react version from client/package-lock.json');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ─── Fixture-based subdirectory / monorepo tests ──────────────────────────────
+
+const __fixtureDir = resolve(dirname(fileURLToPath(import.meta.url)), 'fixtures/org');
+
+test('frontend-subdir fixture: yarn detected and @acme packages resolved', async () => {
+  // The fixture has no package.json at the root; everything is under frontend/
+  const fixtureRoot = join(__fixtureDir, 'apps/frontend-subdir');
+  const result = await scanProject({
+    projectPath: fixtureRoot,
+    targetPackages: ['@acme/ui', '@acme/utils'],
+    config: makeConfig(),
+  });
+
+  assert.equal(result.meta?.tooling.packageManager, 'yarn',
+    'should detect yarn from frontend/yarn.lock');
+  assert.equal(result.meta?.packageName, 'frontend-subdir',
+    'should read package name from frontend/package.json');
+
+  const acmeUiDep = result.meta?.dependencies.find(d => d.name === '@acme/ui');
+  assert.ok(acmeUiDep, 'should list @acme/ui dependency from frontend/package.json');
+  assert.equal(acmeUiDep.versionResolved, '1.2.0',
+    'should resolve @acme/ui version from frontend/yarn.lock');
+
+  // Source files in frontend/src/ should be scanned
+  assert.ok(result.fileCount >= 2, `expected at least 2 source files, got ${result.fileCount}`);
+
+  // Button component from @acme/ui should be detected
+  assert.ok(result.summary.byPackage['@acme/ui'],
+    '@acme/ui should appear in the scan summary');
+});
+
+test('monorepo-root fixture: pnpm detected at workspace root', async () => {
+  // The fixture is a pnpm workspace root with packages/web and packages/ui
+  const fixtureRoot = join(__fixtureDir, 'apps/monorepo-root');
+  const result = await scanProject({
+    projectPath: fixtureRoot,
+    targetPackages: ['@acme/ui', '@acme/utils'],
+    config: makeConfig(),
+  });
+
+  assert.equal(result.meta?.tooling.packageManager, 'pnpm',
+    'should detect pnpm from workspace root pnpm-lock.yaml');
+  assert.equal(result.meta?.packageName, 'monorepo-root',
+    'should read package name from workspace root package.json');
+});
+
+test('monorepo-root/packages/web fixture: pnpm detected from workspace root lockfile', async () => {
+  // Scanning a monorepo subpackage — the lockfile lives in the workspace root
+  const pkgPath = join(__fixtureDir, 'apps/monorepo-root/packages/web');
+  const result = await scanProject({
+    projectPath: pkgPath,
+    targetPackages: ['@acme/ui', '@acme/utils'],
+    config: makeConfig(),
+  });
+
+  assert.equal(result.meta?.tooling.packageManager, 'pnpm',
+    'should detect pnpm by walking up to workspace root pnpm-lock.yaml');
+  assert.equal(result.meta?.packageName, '@monorepo/web',
+    'should read package name from packages/web/package.json');
+
+  const acmeUiDep = result.meta?.dependencies.find(d => d.name === '@acme/ui');
+  assert.ok(acmeUiDep, 'should list @acme/ui from packages/web/package.json');
+  assert.equal(acmeUiDep.versionResolved, '1.2.0',
+    'should resolve @acme/ui version from workspace root pnpm-lock.yaml');
+
+  // Button and formatDate usages should be detected in packages/web/src/
+  assert.ok(result.summary.byPackage['@acme/ui'],
+    '@acme/ui should appear in scan summary for packages/web');
+  assert.ok(result.summary.byPackage['@acme/utils'],
+    '@acme/utils should appear in scan summary for packages/web');
 });

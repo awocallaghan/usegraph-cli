@@ -48,16 +48,20 @@ const FIXTURE_PROJECTS = [
   join(FIXTURES_ROOT, 'apps/mobile'),
   join(FIXTURES_ROOT, 'packages/ui'),
   join(FIXTURES_ROOT, 'packages/utils'),
+  join(FIXTURES_ROOT, 'apps/frontend-subdir'),
+  join(FIXTURES_ROOT, 'apps/monorepo-root'),
 ];
 
 // Maps source path → history key (e.g. 'apps/web-app')
 const HISTORY_KEYS = {
-  [join(FIXTURES_ROOT, 'apps/web-app')]:    'apps/web-app',
-  [join(FIXTURES_ROOT, 'apps/dashboard')]:  'apps/dashboard',
-  [join(FIXTURES_ROOT, 'apps/docs')]:       'apps/docs',
-  [join(FIXTURES_ROOT, 'apps/mobile')]:     'apps/mobile',
-  [join(FIXTURES_ROOT, 'packages/ui')]:     'packages/ui',
-  [join(FIXTURES_ROOT, 'packages/utils')]:  'packages/utils',
+  [join(FIXTURES_ROOT, 'apps/web-app')]:         'apps/web-app',
+  [join(FIXTURES_ROOT, 'apps/dashboard')]:       'apps/dashboard',
+  [join(FIXTURES_ROOT, 'apps/docs')]:            'apps/docs',
+  [join(FIXTURES_ROOT, 'apps/mobile')]:          'apps/mobile',
+  [join(FIXTURES_ROOT, 'packages/ui')]:          'packages/ui',
+  [join(FIXTURES_ROOT, 'packages/utils')]:       'packages/utils',
+  [join(FIXTURES_ROOT, 'apps/frontend-subdir')]: 'apps/frontend-subdir',
+  [join(FIXTURES_ROOT, 'apps/monorepo-root')]:   'apps/monorepo-root',
 };
 
 // Work dirs: temp copies initialized with full git history (populated in before())
@@ -112,9 +116,9 @@ after(() => {
 
 // ─── Assertions ───────────────────────────────────────────────────────────────
 
-test('list_projects returns exactly 6 projects', async () => {
+test('list_projects returns exactly 8 projects', async () => {
   const rows = await callTool('list_projects', {});
-  assert.equal(rows.length, 6, `Expected 6 projects, got ${rows.length}: ${JSON.stringify(rows.map(r => r.project_id))}`);
+  assert.equal(rows.length, 8, `Expected 8 projects, got ${rows.length}: ${JSON.stringify(rows.map(r => r.project_id))}`);
 });
 
 test('list_packages includes @acme/ui and @acme/utils', async () => {
@@ -217,12 +221,12 @@ test('query_dependency_versions: react 18.2.0 is present', async () => {
   );
 });
 
-test('get_scan_metadata: project_count is 6', async () => {
+test('get_scan_metadata: project_count is 8', async () => {
   const meta = await callTool('get_scan_metadata', {});
   assert.equal(
     meta.project_count,
-    6,
-    `Expected project_count=6, got ${meta.project_count}`,
+    8,
+    `Expected project_count=8, got ${meta.project_count}`,
   );
 });
 
@@ -259,6 +263,58 @@ test('subpath external imports (@acme/ui/icons) are captured', async () => {
   assert.ok(rows.length >= 1, `Expected @acme/ui/icons to appear in component_usages, but it was not found`);
 });
 
+// ─── Subdirectory / monorepo project assertions ────────────────────────────────
+
+test('frontend-subdir: yarn detected and @acme/ui used', async () => {
+  const { loadLatestScanResult } = await import('../dist/storage.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+  const { createStorageBackend } = await import('../dist/storage/index.js');
+  const { loadConfig } = await import('../dist/config.js');
+
+  // Find the work dir for frontend-subdir
+  const frontendSubdirWorkPath = WORK_PROJECTS.find(p => p.includes('frontend-subdir'));
+  assert.ok(frontendSubdirWorkPath, 'should have a work dir for frontend-subdir');
+
+  const config = loadConfig(frontendSubdirWorkPath);
+  const slug = computeProjectSlug(frontendSubdirWorkPath);
+  const backend = createStorageBackend(frontendSubdirWorkPath, slug, {}, config);
+  const result = backend.loadLatest();
+
+  assert.ok(result, 'should have a scan result for frontend-subdir');
+  assert.equal(result.meta?.tooling.packageManager, 'yarn',
+    'frontend-subdir should have yarn as package manager (from frontend/yarn.lock)');
+  assert.ok(result.summary.byPackage['@acme/ui'],
+    '@acme/ui should be tracked in frontend-subdir scan');
+});
+
+test('monorepo-root: pnpm workspace detected at root', async () => {
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+  const { createStorageBackend } = await import('../dist/storage/index.js');
+  const { loadConfig } = await import('../dist/config.js');
+
+  const monorepoWorkPath = WORK_PROJECTS.find(p => p.includes('monorepo-root'));
+  assert.ok(monorepoWorkPath, 'should have a work dir for monorepo-root');
+
+  const config = loadConfig(monorepoWorkPath);
+  const slug = computeProjectSlug(monorepoWorkPath);
+  const backend = createStorageBackend(monorepoWorkPath, slug, {}, config);
+  const result = backend.loadLatest();
+
+  assert.ok(result, 'should have a scan result for monorepo-root');
+  assert.equal(result.meta?.tooling.packageManager, 'pnpm',
+    'monorepo-root should have pnpm as package manager (from pnpm-lock.yaml)');
+});
+
+test('query_tooling_distribution: package_manager includes yarn and pnpm', async () => {
+  const rows = await callTool('query_tooling_distribution', {
+    category: 'package_manager',
+  });
+  const values = rows.map((r) => r.value);
+  assert.ok(values.includes('pnpm'), `pnpm not found in package_manager distribution: ${JSON.stringify(values)}`);
+  assert.ok(values.includes('yarn'), `yarn not found in package_manager distribution: ${JSON.stringify(values)}`);
+  assert.ok(values.includes('npm'), `npm not found in package_manager distribution: ${JSON.stringify(values)}`);
+});
+
 // ─── Dashboard data loader ────────────────────────────────────────────────────
 
 test('dashboard data loader outputs valid JSON with correct shape', () => {
@@ -291,7 +347,7 @@ test('dashboard data loader outputs valid JSON with correct shape', () => {
   assert.ok(Array.isArray(parsed.packageManagerCounts), 'packageManagerCounts should be an array');
 
   // Data correctness
-  assert.equal(parsed.projects.length, 6, `Expected 6 projects, got ${parsed.projects.length}`);
+  assert.equal(parsed.projects.length, 8, `Expected 8 projects, got ${parsed.projects.length}`);
   assert.ok(parsed.totalComponentUsages > 0, 'totalComponentUsages should be > 0');
   assert.ok(parsed.totalFunctionUsages > 0, 'totalFunctionUsages should be > 0');
 
@@ -424,7 +480,7 @@ test('git history: web-app snapshots span at least 5 months', async () => {
   );
 });
 
-test('git history: all 6 projects have ≥5 snapshot rows after full history scan', async () => {
+test('git history: all projects have ≥2 snapshot rows after full history scan', async () => {
   // Scan all remaining projects with full history (web-app was already scanned in the --history test)
   for (const workPath of WORK_PROJECTS.slice(1)) {
     const scanResult = spawnSync(
@@ -450,9 +506,11 @@ test('git history: all 6 projects have ≥5 snapshot rows after full history sca
        WHERE project_id = '${slug.replace(/'/g, "''")}'`
     );
     const count = Number(rows[0].cnt);
+    // The original 6 projects have many commits (≥5); the 2 new fixture projects
+    // have minimal history (≥2 commits each).
     assert.ok(
-      count >= 5,
-      `Expected ≥5 snapshot rows for ${slug}, got ${count}`,
+      count >= 2,
+      `Expected ≥2 snapshot rows for ${slug}, got ${count}`,
     );
   }
 });

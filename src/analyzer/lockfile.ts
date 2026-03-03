@@ -225,13 +225,18 @@ export class PnpmLockfileParser implements LockfileParser {
   }
 
   /**
-   * Parse deps from the `importers['.']` block.
+   * Parse deps from all `importers[*]` blocks.
    * Used for monorepo v5 and all v6+ lockfiles.
+   *
+   * Collects resolved versions from every importer entry (not just '.')
+   * so that scanning any subpackage in a monorepo can find its versions.
+   * When the same package name appears in multiple importers the first
+   * occurrence wins (they typically resolve to the same version anyway).
    *
    * State machine phases:
    *  0 — looking for `importers:`
-   *  1 — inside importers, looking for the root `.:` entry
-   *  2 — inside `.`, looking for `dependencies:` / `devDependencies:` at indent 4
+   *  1 — inside importers, waiting for any importer key at indent 2
+   *  2 — inside an importer, looking for `dependencies:` / `devDependencies:` at indent 4
    *  3 — inside a deps section, collecting package entries
    */
   private _parseImporters(
@@ -251,9 +256,9 @@ export class PnpmLockfileParser implements LockfileParser {
         if (ind === 0 && t === 'importers:') phase = 1;
       } else if (phase === 1) {
         if (ind === 0) { phase = 0; continue; }
-        if (ind === 2) {
-          const key = t.endsWith(':') ? t.slice(0, -1).replace(/^['"]|['"]$/g, '') : null;
-          if (key === '.') phase = 2;
+        if (ind === 2 && t.endsWith(':')) {
+          // Any importer key — enter the importer block
+          phase = 2;
         }
       } else if (phase === 2) {
         if (ind <= 2) { phase = 1; continue; }
@@ -264,7 +269,7 @@ export class PnpmLockfileParser implements LockfileParser {
         }
       } else {
         // phase === 3
-        if (ind <= 2) break; // done with '.' block
+        if (ind <= 2) { phase = 1; continue; } // back to scanning for next importer
         if (ind === 4) {
           currentPkg = null;
           inDeps = t === 'dependencies:' || t === 'devDependencies:';

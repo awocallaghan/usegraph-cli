@@ -1866,15 +1866,71 @@ export function debounce<T extends (...args: Parameters<T>) => ReturnType<T>>(
   ],
 };
 
+// ── apps/frontend-subdir ──────────────────────────────────────────────────────
+// Simulates a project where the web app lives under a frontend/ subdirectory.
+// There is no package.json at the git root — only under frontend/.
+
+const frontendSubdirHistory = {
+  remote: 'https://github.com/test-org/frontend-subdir.git',
+  commits: [
+    {
+      date: daysAgo(30),
+      message: 'feat: initial frontend setup',
+      files: {
+        'frontend/package.json': readFixture('apps/frontend-subdir', 'frontend/package.json'),
+        'frontend/yarn.lock': readFixture('apps/frontend-subdir', 'frontend/yarn.lock'),
+        'frontend/tsconfig.json': readFixture('apps/frontend-subdir', 'frontend/tsconfig.json'),
+        'frontend/src/App.tsx': readFixture('apps/frontend-subdir', 'frontend/src/App.tsx'),
+        'frontend/src/utils.ts': readFixture('apps/frontend-subdir', 'frontend/src/utils.ts'),
+      },
+    },
+    {
+      date: daysAgo(5),
+      message: 'chore: final cleanup',
+      files: readAllFixtures('apps/frontend-subdir'),
+    },
+  ],
+};
+
+// ── apps/monorepo-root ────────────────────────────────────────────────────────
+// A pnpm workspace monorepo with packages/web and packages/ui subpackages.
+
+const monorepoRootHistory = {
+  remote: 'https://github.com/test-org/monorepo-root.git',
+  commits: [
+    {
+      date: daysAgo(30),
+      message: 'feat: initial monorepo setup',
+      files: {
+        'package.json': readFixture('apps/monorepo-root', 'package.json'),
+        'pnpm-workspace.yaml': readFixture('apps/monorepo-root', 'pnpm-workspace.yaml'),
+        'pnpm-lock.yaml': readFixture('apps/monorepo-root', 'pnpm-lock.yaml'),
+        'tsconfig.json': readFixture('apps/monorepo-root', 'tsconfig.json'),
+        'packages/web/package.json': readFixture('apps/monorepo-root', 'packages/web/package.json'),
+        'packages/web/src/App.tsx': readFixture('apps/monorepo-root', 'packages/web/src/App.tsx'),
+        'packages/ui/package.json': readFixture('apps/monorepo-root', 'packages/ui/package.json'),
+        'packages/ui/src/Button.ts': readFixture('apps/monorepo-root', 'packages/ui/src/Button.ts'),
+      },
+    },
+    {
+      date: daysAgo(5),
+      message: 'chore: final cleanup',
+      files: readAllFixtures('apps/monorepo-root'),
+    },
+  ],
+};
+
 // ── Exports ───────────────────────────────────────────────────────────────────
 
 export const ORG_HISTORY = {
-  'apps/web-app':   webAppHistory,
-  'apps/dashboard': dashboardHistory,
-  'apps/docs':      docsHistory,
-  'apps/mobile':    mobileHistory,
-  'packages/ui':    uiHistory,
-  'packages/utils': utilsHistory,
+  'apps/web-app':          webAppHistory,
+  'apps/dashboard':        dashboardHistory,
+  'apps/docs':             docsHistory,
+  'apps/mobile':           mobileHistory,
+  'packages/ui':           uiHistory,
+  'packages/utils':        utilsHistory,
+  'apps/frontend-subdir':  frontendSubdirHistory,
+  'apps/monorepo-root':    monorepoRootHistory,
 };
 
 /**

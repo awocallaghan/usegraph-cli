@@ -8,9 +8,61 @@
  * per project before the file scan begins.
  */
 import { existsSync, readFileSync } from 'fs';
-import { join, relative } from 'path';
+import { dirname, join, relative } from 'path';
 import fg from 'fast-glob';
 import type { DependencyEntry, ProjectMeta, ToolingMeta } from '../types.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Package root and lockfile discovery helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LOCKFILE_NAMES = ['pnpm-lock.yaml', 'yarn.lock', 'package-lock.json', 'bun.lock', 'bun.lockb'];
+
+/**
+ * Find the directory that contains `package.json` for the given project.
+ *
+ * Returns `projectPath` when a `package.json` exists there (normal case).
+ * Falls back to the first immediate subdirectory that contains a `package.json`
+ * (handles projects where the web app lives under e.g. `frontend/`).
+ */
+export function findPackageRoot(projectPath: string): string {
+  if (existsSync(join(projectPath, 'package.json'))) {
+    return projectPath;
+  }
+  const found = fg.sync('*/package.json', {
+    cwd: projectPath,
+    deep: 2,
+    ignore: ['**/node_modules/**'],
+  });
+  if (found.length > 0) {
+    // found[0] is like 'frontend/package.json' — strip the filename
+    const subdir = found[0].slice(0, found[0].lastIndexOf('/'));
+    return join(projectPath, subdir);
+  }
+  return projectPath;
+}
+
+/**
+ * Find the directory that contains a lockfile, starting from `startDir` and
+ * walking up the directory tree.
+ *
+ * Returns `startDir` when a lockfile is found there (normal case).
+ * Walks up to the filesystem root to handle monorepo subpackages that share a
+ * lockfile in the workspace root (e.g. `/repo/packages/ui/` → `/repo/`).
+ * Falls back to `startDir` when no lockfile is found anywhere.
+ */
+export function findLockfileDir(startDir: string): string {
+  let dir = startDir;
+  while (true) {
+    if (LOCKFILE_NAMES.some((f) => existsSync(join(dir, f)))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break; // reached filesystem root
+    dir = parent;
+  }
+  return startDir;
+}
 
 // Internal type — not exported; used by the legacy config-file detection table
 interface ToolingInfo {
@@ -168,7 +220,9 @@ const TOOL_DEFINITIONS: ToolDef[] = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function analyzeProjectMeta(projectPath: string): ProjectMeta {
-  const packageJsonPath = join(projectPath, 'package.json');
+  // Resolve the directory that actually contains package.json (may be a subdirectory)
+  const packageRoot = findPackageRoot(projectPath);
+  const packageJsonPath = join(packageRoot, 'package.json');
   let packageName = '';
   let packageVersion = '';
   const dependencies: DependencyEntry[] = [];
@@ -212,7 +266,7 @@ export function analyzeProjectMeta(projectPath: string): ProjectMeta {
     }
   }
 
-  const tooling = buildToolingMeta(projectPath, dependencies, parsedPkg);
+  const tooling = buildToolingMeta(packageRoot, dependencies, parsedPkg);
 
   return { packageName, packageVersion, dependencies, tooling };
 }
@@ -253,12 +307,14 @@ function buildToolingMeta(
   deps: DependencyEntry[],
   parsedPkg: Record<string, unknown> | null,
 ): ToolingMeta {
-  // Package manager — lockfile presence wins
+  // Package manager — walk up the directory tree to find the lockfile
+  // (handles monorepo subpackages whose lockfile lives in the workspace root)
+  const lockfileDir = findLockfileDir(projectPath);
   let packageManager: string | null = null;
-  if (fileExists(projectPath, 'pnpm-lock.yaml')) packageManager = 'pnpm';
-  else if (fileExists(projectPath, 'bun.lockb', 'bun.lock')) packageManager = 'bun';
-  else if (fileExists(projectPath, 'yarn.lock')) packageManager = 'yarn';
-  else if (fileExists(projectPath, 'package-lock.json')) packageManager = 'npm';
+  if (fileExists(lockfileDir, 'pnpm-lock.yaml')) packageManager = 'pnpm';
+  else if (fileExists(lockfileDir, 'bun.lockb', 'bun.lock')) packageManager = 'bun';
+  else if (fileExists(lockfileDir, 'yarn.lock')) packageManager = 'yarn';
+  else if (fileExists(lockfileDir, 'package-lock.json')) packageManager = 'npm';
 
   // Build tool — config file, then devDep fallback
   let buildTool: string | null = null;
