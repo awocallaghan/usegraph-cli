@@ -36,6 +36,7 @@ export function extractFromAst(
   filePath: string,
   source: string,
   targetPackages: Set<string>,
+  knownPackages?: Set<string>,
 ): ExtractionResult {
   const imports: ImportInfo[] = [];
   const componentUsages: ComponentUsage[] = [];
@@ -63,7 +64,7 @@ export function extractFromAst(
 
     const importSource = getStringValue(node['source']);
     if (!importSource) return;
-    if (!isExternalImport(importSource)) return; // skip internal/aliased paths
+    if (!isExternalImport(importSource, knownPackages)) return; // skip internal/aliased paths
 
     const typeOnly = !!(node['typeOnly'] as boolean);
     const specifierNodes = (node['specifiers'] as AstNode[]) ?? [];
@@ -233,13 +234,43 @@ function isTargetPackage(source: string, targets: Set<string>): boolean {
  * Returns true if the import source is an external package (npm dependency or
  * subpath import), false if it is an internal module (relative path, absolute
  * path, or a common path alias like @/ or ~/).
+ *
+ * When `knownPackages` is provided (built from package.json dependencies +
+ * devDependencies), an import is only treated as external if it is a known
+ * package or a subpath of one.  This prevents project-level path aliases
+ * (e.g. webpack/Vite aliases) from being mistakenly classified as npm deps.
  */
-function isExternalImport(source: string): boolean {
+function isExternalImport(source: string, knownPackages?: Set<string>): boolean {
   if (source.startsWith('.')) return false;  // relative: ./foo  ../bar
   if (source.startsWith('/')) return false;  // absolute path
   if (source.startsWith('@/')) return false; // @/ alias (e.g. Next.js, Vite)
   if (source.startsWith('~/')) return false; // ~/ alias
+
+  // If we have the project's dependency list, verify this is a real package
+  if (knownPackages && knownPackages.size > 0) {
+    return isKnownPackageOrSubpath(source, knownPackages);
+  }
+
   return true;
+}
+
+/**
+ * Extracts the npm package name from an import path.
+ *  - Scoped:   '@scope/name/sub/path' → '@scope/name'
+ *  - Unscoped: 'name/sub/path'        → 'name'
+ */
+function getPackageName(source: string): string {
+  if (source.startsWith('@')) {
+    const parts = source.split('/');
+    return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : source;
+  }
+  return source.split('/')[0];
+}
+
+/** Returns true when `source` exactly matches a known package or is a subpath export of one. */
+function isKnownPackageOrSubpath(source: string, knownPackages: Set<string>): boolean {
+  if (knownPackages.has(source)) return true;
+  return knownPackages.has(getPackageName(source));
 }
 
 function getStringValue(node: unknown): string | undefined {
