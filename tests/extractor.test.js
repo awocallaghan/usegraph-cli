@@ -425,6 +425,70 @@ colors.primary();
   assert.equal(functionCalls[0].importedFrom, '@myds/tokens');
 });
 
+// ─── Nested object property function calls ────────────────────────────────────
+
+test('detects nested call on default import: ui.api.functionCall()', async () => {
+  const src = `
+    import ui from '@acme/ui';
+    ui.api.functionCall('test');
+  `;
+  const { functionCalls } = await extract(src, ['@acme/ui']);
+  assert.equal(functionCalls.length, 1);
+  assert.equal(functionCalls[0].functionName, 'api.functionCall');
+  assert.equal(functionCalls[0].importedFrom, '@acme/ui');
+  assert.equal(functionCalls[0].args[0].type, 'string');
+  assert.equal(functionCalls[0].args[0].value, 'test');
+});
+
+test('nested default import call normalises to same funcName as named import call', async () => {
+  const src1 = `
+    import ui from '@acme/ui';
+    ui.api.functionCall('test');
+  `;
+  const src2 = `
+    import { api } from '@acme/ui';
+    api.functionCall('test');
+  `;
+  const result1 = await extract(src1, ['@acme/ui']);
+  const result2 = await extract(src2, ['@acme/ui']);
+  assert.equal(result1.functionCalls[0].functionName, result2.functionCalls[0].functionName,
+    'nested default import call should produce same functionName as named import call');
+  assert.equal(result1.functionCalls[0].importedFrom, result2.functionCalls[0].importedFrom,
+    'both calls should resolve to the same package');
+});
+
+test('detects nested call on named import used as an object: lib.sub.fn()', async () => {
+  const src = `
+    import { lib } from '@acme/ui';
+    lib.sub.fn(42);
+  `;
+  const { functionCalls } = await extract(src, ['@acme/ui']);
+  assert.equal(functionCalls.length, 1);
+  assert.equal(functionCalls[0].functionName, 'sub.fn');
+  assert.equal(functionCalls[0].importedFrom, '@acme/ui');
+  assert.equal(functionCalls[0].args[0].value, 42);
+});
+
+test('detects nested call on namespace import: DS.api.fn()', async () => {
+  const src = `
+    import * as DS from '@acme/ui';
+    DS.api.fn('hello');
+  `;
+  const { functionCalls } = await extract(src, ['@acme/ui']);
+  assert.equal(functionCalls.length, 1);
+  assert.equal(functionCalls[0].functionName, 'DS.api.fn');
+  assert.equal(functionCalls[0].importedFrom, '@acme/ui');
+});
+
+test('does not detect nested call when outermost object is not an import', async () => {
+  const src = `
+    import ui from '@acme/ui';
+    someOther.api.functionCall('test');
+  `;
+  const { functionCalls } = await extract(src, ['@acme/ui']);
+  assert.equal(functionCalls.length, 0);
+});
+
 // ─── NewExpression tracking ───────────────────────────────────────────────────
 
 test('tracks new expression for a named constructor import', async () => {
