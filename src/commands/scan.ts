@@ -29,6 +29,7 @@ import {
   getCommitsInRange,
   getCommitAtOrBefore,
   selectCheckpointCommits,
+  type CommitEntry,
 } from '../git-history.js';
 
 export interface ScanCommandOptions {
@@ -391,7 +392,8 @@ async function runCheckpointScan(
   console.log('');
 
   // Baseline is appended after in-range commits (it is the oldest entry)
-  const allCommits: Array<{ sha: string; date: string; epochMs: number; overrideCodeAt?: string }> = [
+  type CommitWithOverride = CommitEntry & { overrideCodeAt?: string };
+  const allCommits: CommitWithOverride[] = [
     ...commits,
     ...(baselineNeeded ? [{ ...rawBaseline!, overrideCodeAt: sinceDate.toISOString() }] : []),
   ];

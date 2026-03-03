@@ -565,11 +565,12 @@ test('--since: inactive project (no commits in range) gets a baseline scan pinne
   // Create a fresh project whose only commit is 45 days in the past.
   // When we scan with --since 7d the commit is outside the range, but we still
   // expect a baseline scan with codeAt set to sinceDate (≈ now-7d).
+  const DAY_MS = 24 * 60 * 60 * 1000;
   const tmpRoot = mkdtempSync(join(tmpdir(), 'usegraph-baseline-'));
   try {
     mkdirSync(tmpRoot, { recursive: true });
 
-    const commitDate = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString();
+    const commitDate = new Date(Date.now() - 45 * DAY_MS).toISOString();
     await initHistoricalRepo(tmpRoot, [
       {
         date: commitDate,
@@ -611,7 +612,7 @@ test('--since: inactive project (no commits in range) gets a baseline scan pinne
     assert.ok(scan.codeAt !== null, 'codeAt should be set on the baseline scan');
 
     const codeAtMs = new Date(scan.codeAt).getTime();
-    const sinceDateMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const sinceDateMs = Date.now() - 7 * DAY_MS;
     // codeAt should be within 5 minutes of sinceDate (7 days ago), not 45 days ago
     assert.ok(
       Math.abs(codeAtMs - sinceDateMs) < 5 * 60 * 1000,
