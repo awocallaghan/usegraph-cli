@@ -17,6 +17,7 @@ export async function analyzeFile(
   filePath: string,
   projectRoot: string,
   targetPackages: Set<string>,
+  knownPackages?: Set<string>,
 ): Promise<FileAnalysis> {
   const relativePath = relative(projectRoot, filePath);
   const errors: string[] = [];
@@ -55,6 +56,7 @@ export async function analyzeFile(
       filePath,
       source,
       targetPackages,
+      knownPackages,
     );
 
     return { filePath, relativePath, imports, componentUsages, functionCalls, errors };
