@@ -14,6 +14,7 @@ const {
   parsePeriod,
   resolveDate,
   getCommitsInRange,
+  getCommitAtOrBefore,
   selectCheckpointCommits,
 } = await import('../dist/git-history.js');
 
@@ -178,6 +179,66 @@ describe('getCommitsInRange', () => {
     assert.ok(afterArg, '--after argument should be present');
     const afterDate = new Date(afterArg.replace('--after=', ''));
     assert.equal(afterDate.getTime(), SINCE.getTime() - 1000);
+  });
+});
+
+// ── getCommitAtOrBefore ───────────────────────────────────────────────────────
+
+describe('getCommitAtOrBefore', () => {
+  function makeGitStub(output) {
+    return (_cwd, _args) => output;
+  }
+
+  const DATE = new Date('2024-01-01T00:00:00Z');
+
+  test('returns CommitEntry for the most recent commit at or before date', () => {
+    const log = 'abc1234 2023-12-15T10:00:00+00:00';
+    const entry = getCommitAtOrBefore('/fake', DATE, makeGitStub(log));
+    assert.ok(entry !== null);
+    assert.equal(entry.sha, 'abc1234');
+    assert.equal(entry.date, '2023-12-15T10:00:00+00:00');
+    assert.ok(entry.epochMs > 0);
+  });
+
+  test('returns null when git returns null (non-git dir)', () => {
+    const entry = getCommitAtOrBefore('/fake', DATE, makeGitStub(null));
+    assert.equal(entry, null);
+  });
+
+  test('returns null when output is empty string', () => {
+    const entry = getCommitAtOrBefore('/fake', DATE, makeGitStub(''));
+    assert.equal(entry, null);
+  });
+
+  test('passes --before with date + 1 second to make date inclusive', () => {
+    let capturedArgs;
+    const stub = (_cwd, args) => { capturedArgs = args; return null; };
+    getCommitAtOrBefore('/fake', DATE, stub);
+
+    const beforeArg = capturedArgs.find(a => a.startsWith('--before='));
+    assert.ok(beforeArg, '--before argument should be present');
+    const beforeDate = new Date(beforeArg.replace('--before=', ''));
+    assert.equal(beforeDate.getTime(), DATE.getTime() + 1000);
+  });
+
+  test('passes -n 1 to return only the most recent commit', () => {
+    let capturedArgs;
+    const stub = (_cwd, args) => { capturedArgs = args; return null; };
+    getCommitAtOrBefore('/fake', DATE, stub);
+
+    const nIdx = capturedArgs.indexOf('-n');
+    assert.ok(nIdx !== -1, '-n argument should be present');
+    assert.equal(capturedArgs[nIdx + 1], '1');
+  });
+
+  test('returns null for malformed line (no space)', () => {
+    const entry = getCommitAtOrBefore('/fake', DATE, makeGitStub('abc1234'));
+    assert.equal(entry, null);
+  });
+
+  test('returns null when date is invalid', () => {
+    const entry = getCommitAtOrBefore('/fake', DATE, makeGitStub('abc1234 not-a-date'));
+    assert.equal(entry, null);
   });
 });
 

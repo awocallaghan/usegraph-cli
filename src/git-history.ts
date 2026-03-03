@@ -110,6 +110,48 @@ export function getCommitsInRange(
   return entries; // git log already returns newest-first
 }
 
+// ── getCommitAtOrBefore ───────────────────────────────────────────────────────
+
+/**
+ * Return the latest commit at or before `date`, or null if none exists.
+ *
+ * Used to find a "baseline" commit for the start of a `--since` scan window:
+ * if a project was last changed before the `--since` boundary, this gives us
+ * the commit that represents the project state at that boundary, even though
+ * the commit itself is older.  The caller is responsible for overriding
+ * `codeAt` to `date` on the resulting scan so data shows the correct period.
+ */
+export function getCommitAtOrBefore(
+  projectPath: string,
+  date: Date,
+  gitRaw: GitRawFn,
+): CommitEntry | null {
+  // git --before is exclusive, so add 1 second to make `date` inclusive
+  const beforeDate = new Date(date.getTime() + 1000);
+
+  const output = gitRaw(projectPath, [
+    'log',
+    `--before=${beforeDate.toISOString()}`,
+    '-n', '1',
+    '--format=%H %cI',
+  ]);
+
+  if (!output) return null;
+
+  const trimmed = output.trim();
+  if (!trimmed) return null;
+
+  const spaceIdx = trimmed.indexOf(' ');
+  if (spaceIdx === -1) return null;
+
+  const sha = trimmed.slice(0, spaceIdx);
+  const commitDate = trimmed.slice(spaceIdx + 1).trim();
+  const epochMs = new Date(commitDate).getTime();
+  if (isNaN(epochMs)) return null;
+
+  return { sha, date: commitDate, epochMs };
+}
+
 // ── selectCheckpointCommits ───────────────────────────────────────────────────
 
 /**
