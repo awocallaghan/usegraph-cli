@@ -30,6 +30,15 @@ Thumbs.db
 # Node modules (if using Node.js projects)
 node_modules/
 
+# Lock files from package managers other than pnpm
+package-lock.json
+yarn.lock
+# Re-include lockfiles that are part of test fixtures
+!tests/fixtures/**/*.lock
+!tests/fixtures/**/*.yaml
+!tests/fixtures/**/package-lock.json
+!tests/fixtures/**/yarn.lock
+
 # Build output
 dist/
 

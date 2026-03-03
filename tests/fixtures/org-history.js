@@ -1866,6 +1866,8 @@ export function debounce<T extends (...args: Parameters<T>) => ReturnType<T>>(
   ],
 };
 
+// ── Exports ───────────────────────────────────────────────────────────────────
+
 // ── apps/frontend-subdir ──────────────────────────────────────────────────────
 // Simulates a project where the web app lives under a frontend/ subdirectory.
 // There is no package.json at the git root — only under frontend/.

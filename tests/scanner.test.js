@@ -570,6 +570,65 @@ test('webpack detected when config is non-standard name in a subdirectory (e.g. 
   }
 });
 
+// ─── Alias import filtering ───────────────────────────────────────────────────
+
+test('excludes alias imports that are not in package.json dependencies', async () => {
+  const root = join(tmpdir(), `usegraph-test-${randomUUID()}`);
+  mkdirSync(join(root, 'src'), { recursive: true });
+  // @components is a webpack alias, not in package.json
+  const fileWithAlias = `
+import { Button } from '@components/Button';
+import { useState } from 'react';
+export default function App() { return null; }
+`;
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name: 'my-app',
+    dependencies: { react: '^18.0.0' },
+  }), 'utf-8');
+  writeFileSync(join(root, 'src', 'App.tsx'), fileWithAlias, 'utf-8');
+  try {
+    const result = await scanProject({
+      projectPath: root,
+      targetPackages: [],
+      config: makeConfig(),
+    });
+    const allImports = result.files.flatMap(f => f.imports);
+    const sources = allImports.map(i => i.source);
+    assert.ok(sources.includes('react'), 'real dep (react) should be in imports');
+    assert.ok(!sources.includes('@components/Button'),
+      'alias import (@components/Button) should not appear when package.json is present');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('subpath imports of known packages are included when package.json is present', async () => {
+  const root = join(tmpdir(), `usegraph-test-${randomUUID()}`);
+  mkdirSync(join(root, 'src'), { recursive: true });
+  const fileWithSubpath = `
+import { createRoot } from 'react-dom/client';
+export default function App() { return null; }
+`;
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name: 'my-app',
+    dependencies: { react: '^18.0.0', 'react-dom': '^18.0.0' },
+  }), 'utf-8');
+  writeFileSync(join(root, 'src', 'App.tsx'), fileWithSubpath, 'utf-8');
+  try {
+    const result = await scanProject({
+      projectPath: root,
+      targetPackages: [],
+      config: makeConfig(),
+    });
+    const allImports = result.files.flatMap(f => f.imports);
+    const sources = allImports.map(i => i.source);
+    assert.ok(sources.includes('react-dom/client'),
+      'subpath import of a known package (react-dom/client) should be included');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // ─── Subdirectory package.json / lockfile detection ───────────────────────────
 
 test('package manager detected when package.json and lockfile are in a subdirectory (frontend/)', async () => {

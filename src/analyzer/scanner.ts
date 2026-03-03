@@ -83,6 +83,26 @@ function readPackageJson(projectPath: string): Record<string, unknown> | null {
 }
 
 /**
+ * Build a set of known package names from package.json `dependencies` and
+ * `devDependencies`.  Used to distinguish real npm imports from project-level
+ * path aliases (e.g. webpack/Vite aliases like `@components/Button`).
+ *
+ * Uses `findPackageRoot` so that projects with `package.json` in a subdirectory
+ * (e.g. `frontend/`) are handled correctly.
+ */
+function readKnownPackages(projectPath: string): Set<string> {
+  const packageRoot = findPackageRoot(projectPath);
+  const pkg = readPackageJson(packageRoot);
+  if (!pkg) return new Set();
+  const names: string[] = [];
+  for (const field of ['dependencies', 'devDependencies'] as const) {
+    const deps = pkg[field] as Record<string, unknown> | undefined;
+    if (deps) names.push(...Object.keys(deps));
+  }
+  return new Set(names);
+}
+
+/**
  * Detect the lockfile for `projectPath` and parse it into a resolved version map.
  *
  * Resolution order (handles subdirectories and monorepos):
@@ -136,6 +156,7 @@ function detectAndParseLockfile(projectPath: string): Map<string, ResolvedDepend
 export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
   const { projectPath, targetPackages, config, onProgress, concurrency = 8, cacheDir } = opts;
   const targetSet = new Set(targetPackages);
+  const knownPackages = readKnownPackages(projectPath);
 
   // Load incremental cache (returns a blank cache when disabled or cold)
   const cache: FileCache | null = cacheDir
@@ -176,15 +197,15 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
             cacheHits++;
           } else {
             // Cache miss — (re-)analyse and update entry
-            analysis = await analyzeFile(file, projectPath, targetSet);
+            analysis = await analyzeFile(file, projectPath, targetSet, knownPackages);
             cache.entries[file] = { mtime: st.mtimeMs, size: st.size, analysis };
           }
         } catch {
           // stat failed; fall back to fresh analysis without caching this file
-          analysis = await analyzeFile(file, projectPath, targetSet);
+          analysis = await analyzeFile(file, projectPath, targetSet, knownPackages);
         }
       } else {
-        analysis = await analyzeFile(file, projectPath, targetSet);
+        analysis = await analyzeFile(file, projectPath, targetSet, knownPackages);
       }
 
       results.push(analysis);
