@@ -16,16 +16,17 @@ import { extractFromAst } from '../dist/analyzer/extractor.js';
  * @param {string} source
  * @param {string[]} targetPackages  - empty means "all packages"
  * @param {boolean} [tsx]
+ * @param {string[]} [knownPackages] - package names from package.json deps
  * @returns {Promise<{ imports, componentUsages, functionCalls }>}
  */
-async function extract(source, targetPackages = [], tsx = false) {
+async function extract(source, targetPackages = [], tsx = false, knownPackages = undefined) {
   const ast = await parse(source, {
     syntax: 'typescript',
     tsx,
     decorators: true,
     dynamicImport: true,
   });
-  return extractFromAst(ast, '/test/file.tsx', source, new Set(targetPackages));
+  return extractFromAst(ast, '/test/file.tsx', source, new Set(targetPackages), knownPackages ? new Set(knownPackages) : undefined);
 }
 
 // ─── Import extraction ────────────────────────────────────────────────────────
@@ -524,4 +525,74 @@ test('mix of internal and external imports: only external appear in imports[]', 
   const { imports } = await extract(src);
   assert.equal(imports.length, 2);
   assert.deepEqual(imports.map(i => i.source).sort(), ['@acme/ui', '@acme/utils']);
+});
+
+// ─── knownPackages: alias vs dependency filtering ────────────────────────────
+
+test('excludes alias import when not in knownPackages', async () => {
+  // @components is a webpack/Vite alias, not an npm package
+  const src = `import { Button } from '@components/Button';`;
+  const { imports } = await extract(src, [], false, ['react', '@acme/ui']);
+  assert.equal(imports.length, 0, 'alias import should be excluded when not in knownPackages');
+});
+
+test('real package import is included when it is in knownPackages', async () => {
+  const src = `import { Button } from '@acme/ui';`;
+  const { imports } = await extract(src, [], false, ['react', '@acme/ui']);
+  assert.equal(imports.length, 1);
+  assert.equal(imports[0].source, '@acme/ui');
+});
+
+test('subpath import is included when parent package is in knownPackages', async () => {
+  const src = `import { Icon } from '@acme/ui/icons';`;
+  const { imports } = await extract(src, [], false, ['react', '@acme/ui']);
+  assert.equal(imports.length, 1);
+  assert.equal(imports[0].source, '@acme/ui/icons');
+});
+
+test('unscoped package subpath import is included when parent package is in knownPackages', async () => {
+  const src = `import { createPortal } from 'react-dom/client';`;
+  const { imports } = await extract(src, [], false, ['react', 'react-dom']);
+  assert.equal(imports.length, 1);
+  assert.equal(imports[0].source, 'react-dom/client');
+});
+
+test('alias import does not produce component usage when knownPackages is provided', async () => {
+  const src = `
+    import { Card } from '@components/Card';
+    const el = <Card title="hello" />;
+  `;
+  const { componentUsages, imports } = await extract(src, [], true, ['react', '@acme/ui']);
+  assert.equal(imports.length, 0, 'alias import should not appear in imports');
+  assert.equal(componentUsages.length, 0, 'alias component should not be tracked');
+});
+
+test('alias import does not produce function call usage when knownPackages is provided', async () => {
+  const src = `
+    import { fetchUser } from '@api/users';
+    fetchUser('123');
+  `;
+  const { functionCalls, imports } = await extract(src, [], false, ['react', '@acme/utils']);
+  assert.equal(imports.length, 0, 'alias import should not appear in imports');
+  assert.equal(functionCalls.length, 0, 'alias function should not be tracked');
+});
+
+test('without knownPackages, alias-looking imports are still treated as external (backward compat)', async () => {
+  // When knownPackages is not provided, fall back to old behavior
+  const src = `import { Button } from '@components/Button';`;
+  const { imports } = await extract(src);
+  assert.equal(imports.length, 1, 'without knownPackages, all non-relative imports are treated as external');
+  assert.equal(imports[0].source, '@components/Button');
+});
+
+test('mix of known packages and aliases: only known packages included', async () => {
+  const src = `
+    import { Button } from '@acme/ui';
+    import { Card } from '@components/Card';
+    import { useState } from 'react';
+    import { helper } from '@utils/helper';
+  `;
+  const { imports } = await extract(src, [], false, ['react', '@acme/ui']);
+  assert.equal(imports.length, 2);
+  assert.deepEqual(imports.map(i => i.source).sort(), ['@acme/ui', 'react']);
 });

@@ -30,6 +30,10 @@ Thumbs.db
 # Node modules (if using Node.js projects)
 node_modules/
 
+# Lock files from package managers other than pnpm
+package-lock.json
+yarn.lock
+
 # Build output
 dist/
 

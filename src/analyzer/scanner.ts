@@ -83,6 +83,22 @@ function readPackageJson(projectPath: string): Record<string, unknown> | null {
 }
 
 /**
+ * Build a set of known package names from package.json `dependencies` and
+ * `devDependencies`.  Used to distinguish real npm imports from project-level
+ * path aliases (e.g. webpack/Vite aliases like `@components/Button`).
+ */
+function readKnownPackages(projectPath: string): Set<string> {
+  const pkg = readPackageJson(projectPath);
+  if (!pkg) return new Set();
+  const names: string[] = [];
+  for (const field of ['dependencies', 'devDependencies'] as const) {
+    const deps = pkg[field] as Record<string, unknown> | undefined;
+    if (deps) names.push(...Object.keys(deps));
+  }
+  return new Set(names);
+}
+
+/**
  * Detect the lockfile present in `projectPath` and parse it into a resolved
  * version map.  Priority order mirrors meta-analyzer's packageManager detection:
  * pnpm > bun (no lockfile parser yet) > yarn > npm.
@@ -125,6 +141,7 @@ function detectAndParseLockfile(projectPath: string): Map<string, ResolvedDepend
 export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
   const { projectPath, targetPackages, config, onProgress, concurrency = 8, cacheDir } = opts;
   const targetSet = new Set(targetPackages);
+  const knownPackages = readKnownPackages(projectPath);
 
   // Load incremental cache (returns a blank cache when disabled or cold)
   const cache: FileCache | null = cacheDir
@@ -165,15 +182,15 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
             cacheHits++;
           } else {
             // Cache miss — (re-)analyse and update entry
-            analysis = await analyzeFile(file, projectPath, targetSet);
+            analysis = await analyzeFile(file, projectPath, targetSet, knownPackages);
             cache.entries[file] = { mtime: st.mtimeMs, size: st.size, analysis };
           }
         } catch {
           // stat failed; fall back to fresh analysis without caching this file
-          analysis = await analyzeFile(file, projectPath, targetSet);
+          analysis = await analyzeFile(file, projectPath, targetSet, knownPackages);
         }
       } else {
-        analysis = await analyzeFile(file, projectPath, targetSet);
+        analysis = await analyzeFile(file, projectPath, targetSet, knownPackages);
       }
 
       results.push(analysis);
