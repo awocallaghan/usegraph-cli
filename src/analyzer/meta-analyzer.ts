@@ -167,7 +167,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
 // Main entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function analyzeProjectMeta(projectPath: string): ProjectMeta {
+export function analyzeProjectMeta(projectPath: string, lockfileDir?: string): ProjectMeta {
   const packageJsonPath = join(projectPath, 'package.json');
   let packageName = '';
   let packageVersion = '';
@@ -212,7 +212,9 @@ export function analyzeProjectMeta(projectPath: string): ProjectMeta {
     }
   }
 
-  const tooling = buildToolingMeta(projectPath, dependencies, parsedPkg);
+  // Use the provided lockfileDir (e.g. monorepo root) or fall back to projectPath
+  const effectiveLockfileDir = lockfileDir ?? projectPath;
+  const tooling = buildToolingMeta(projectPath, dependencies, parsedPkg, effectiveLockfileDir);
 
   return { packageName, packageVersion, dependencies, tooling };
 }
@@ -252,13 +254,14 @@ function buildToolingMeta(
   projectPath: string,
   deps: DependencyEntry[],
   parsedPkg: Record<string, unknown> | null,
+  lockfileDir: string = projectPath,
 ): ToolingMeta {
-  // Package manager — lockfile presence wins
+  // Package manager — lockfile presence wins; check lockfileDir (may be monorepo root)
   let packageManager: string | null = null;
-  if (fileExists(projectPath, 'pnpm-lock.yaml')) packageManager = 'pnpm';
-  else if (fileExists(projectPath, 'bun.lockb', 'bun.lock')) packageManager = 'bun';
-  else if (fileExists(projectPath, 'yarn.lock')) packageManager = 'yarn';
-  else if (fileExists(projectPath, 'package-lock.json')) packageManager = 'npm';
+  if (fileExists(lockfileDir, 'pnpm-lock.yaml')) packageManager = 'pnpm';
+  else if (fileExists(lockfileDir, 'bun.lockb', 'bun.lock')) packageManager = 'bun';
+  else if (fileExists(lockfileDir, 'yarn.lock')) packageManager = 'yarn';
+  else if (fileExists(lockfileDir, 'package-lock.json')) packageManager = 'npm';
 
   // Build tool — config file, then devDep fallback
   let buildTool: string | null = null;
