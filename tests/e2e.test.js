@@ -65,7 +65,10 @@ const WORK_PROJECTS = [];
 
 const DIST_CLI = resolve(__dirname, '..', 'dist', 'index.js');
 const TARGET_PACKAGES = '@acme/ui,@acme/utils';
-const unwrapTimestamp = (value) => (value && typeof value === 'object' && 'value' in value ? value.value : value);
+const normalizeTimestampValue = (value) => {
+  if (value && typeof value === 'object' && 'value' in value) return value.value;
+  return value;
+};
 
 // ─── Setup / teardown ─────────────────────────────────────────────────────────
 
@@ -418,8 +421,8 @@ test('git history: web-app snapshots span at least 5 months', async () => {
   assert.ok(rows.length === 1 && rows[0].oldest && rows[0].newest,
     'Expected code_at data for web-app');
 
-  const oldest = unwrapTimestamp(rows[0].oldest);
-  const newest = unwrapTimestamp(rows[0].newest);
+  const oldest = normalizeTimestampValue(rows[0].oldest);
+  const newest = normalizeTimestampValue(rows[0].newest);
   const spanDays = (new Date(newest) - new Date(oldest)) / (1000 * 60 * 60 * 24);
   assert.ok(
     spanDays >= 150,
@@ -655,8 +658,8 @@ test('after checkpoint scan build, project_snapshots has rows across date range'
   );
 
   assert.ok(rows.length === 1 && rows[0].oldest, 'Expected code_at data for web-app');
-  const oldest = unwrapTimestamp(rows[0].oldest);
-  const newest = unwrapTimestamp(rows[0].newest);
+  const oldest = normalizeTimestampValue(rows[0].oldest);
+  const newest = normalizeTimestampValue(rows[0].newest);
   const spanDays = (new Date(newest) - new Date(oldest)) / (1000 * 60 * 60 * 24);
   assert.ok(
     spanDays >= 150,
