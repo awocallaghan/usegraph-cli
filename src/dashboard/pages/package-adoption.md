@@ -312,13 +312,13 @@ versionSpread.length === 0
 // preventing artificial dips when projects are not scanned on exactly the same days.
 const lastSeenCTEs = `
   timeline AS (
-    SELECT DISTINCT DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS d
+    SELECT DISTINCT DATE_TRUNC('day', COALESCE(TRY_CAST(code_at AS TIMESTAMP), CAST(scanned_at AS TIMESTAMP))) AS d
     FROM project_snapshots
   ),
   project_scan_days AS (
     SELECT DISTINCT
       project_id,
-      DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date
+      DATE_TRUNC('day', COALESCE(TRY_CAST(code_at AS TIMESTAMP), CAST(scanned_at AS TIMESTAMP))) AS scan_date
     FROM project_snapshots
   ),
   latest_scan_per_project AS (
@@ -341,7 +341,7 @@ const trendData = packageFilter
        pkg_present AS (
          SELECT DISTINCT
            project_id,
-           DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date
+           DATE_TRUNC('day', COALESCE(TRY_CAST(code_at AS TIMESTAMP), CAST(scanned_at AS TIMESTAMP))) AS scan_date
          FROM dependencies
          WHERE package_name = '${safePkg}'
        )
@@ -382,7 +382,7 @@ const usageOverTime = packageFilter
        component_counts AS (
          SELECT
            project_id,
-           DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date,
+           DATE_TRUNC('day', COALESCE(TRY_CAST(code_at AS TIMESTAMP), CAST(scanned_at AS TIMESTAMP))) AS scan_date,
            COUNT(*) AS cnt
          FROM component_usages
          WHERE package_name = '${safePkg}' ${usageVersionWhere}
@@ -391,7 +391,7 @@ const usageOverTime = packageFilter
        function_counts AS (
          SELECT
            project_id,
-           DATE_TRUNC('day', COALESCE(code_at, scanned_at)::TIMESTAMP) AS scan_date,
+           DATE_TRUNC('day', COALESCE(TRY_CAST(code_at AS TIMESTAMP), CAST(scanned_at AS TIMESTAMP))) AS scan_date,
            COUNT(*) AS cnt
          FROM function_usages
          WHERE package_name = '${safePkg}' ${usageVersionWhere}
@@ -462,4 +462,3 @@ nonAdopters.length === 0
       },
     })
 ```
-
