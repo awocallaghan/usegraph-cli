@@ -1,0 +1,19 @@
+{
+  "name": "@monorepo/web",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@acme/ui": "^1.2.0",
+    "@acme/utils": "^0.5.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.1.6",
+    "vite": "^4.4.7"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  }
+}
