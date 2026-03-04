@@ -48,20 +48,26 @@ const FIXTURE_PROJECTS = [
   join(FIXTURES_ROOT, 'apps/mobile'),
   join(FIXTURES_ROOT, 'packages/ui'),
   join(FIXTURES_ROOT, 'packages/utils'),
+  // Subdirectory package.json detection: no root package.json, one in frontend/
+  join(FIXTURES_ROOT, 'apps/frontend-subdir'),
 ];
 
 // Maps source path → history key (e.g. 'apps/web-app')
 const HISTORY_KEYS = {
-  [join(FIXTURES_ROOT, 'apps/web-app')]:    'apps/web-app',
-  [join(FIXTURES_ROOT, 'apps/dashboard')]:  'apps/dashboard',
-  [join(FIXTURES_ROOT, 'apps/docs')]:       'apps/docs',
-  [join(FIXTURES_ROOT, 'apps/mobile')]:     'apps/mobile',
-  [join(FIXTURES_ROOT, 'packages/ui')]:     'packages/ui',
-  [join(FIXTURES_ROOT, 'packages/utils')]:  'packages/utils',
+  [join(FIXTURES_ROOT, 'apps/web-app')]:          'apps/web-app',
+  [join(FIXTURES_ROOT, 'apps/dashboard')]:        'apps/dashboard',
+  [join(FIXTURES_ROOT, 'apps/docs')]:             'apps/docs',
+  [join(FIXTURES_ROOT, 'apps/mobile')]:           'apps/mobile',
+  [join(FIXTURES_ROOT, 'packages/ui')]:           'packages/ui',
+  [join(FIXTURES_ROOT, 'packages/utils')]:        'packages/utils',
+  [join(FIXTURES_ROOT, 'apps/frontend-subdir')]:  'apps/frontend-subdir',
 };
 
 // Work dirs: temp copies initialized with full git history (populated in before())
 const WORK_PROJECTS = [];
+
+// Monorepo: single work dir, multiple scan targets within it
+let MONOREPO_WORK_DIR = null;
 
 const DIST_CLI = resolve(__dirname, '..', 'dist', 'index.js');
 const TARGET_PACKAGES = '@acme/ui,@acme/utils';
@@ -80,6 +86,15 @@ before(async () => {
     WORK_PROJECTS.push(workDir);
   }
 
+  // Monorepo: one shared work dir, scanned as two separate workspace packages
+  MONOREPO_WORK_DIR = join(workRoot, 'apps/monorepo');
+  mkdirSync(MONOREPO_WORK_DIR, { recursive: true });
+  await initHistoricalRepo(
+    MONOREPO_WORK_DIR,
+    ORG_HISTORY['apps/monorepo'].commits,
+    { remote: ORG_HISTORY['apps/monorepo'].remote },
+  );
+
   // 1. Scan each work project (latest commit only for the initial scan)
   for (const workPath of WORK_PROJECTS) {
     const result = spawnSync(
@@ -94,6 +109,24 @@ before(async () => {
     if (result.status !== 0) {
       const err = (result.stderr || result.stdout || '').slice(0, 500);
       throw new Error(`Scan failed for ${workPath}:\n${err}`);
+    }
+  }
+
+  // Scan each monorepo workspace package as a separate project
+  for (const pkg of ['packages/web', 'packages/api']) {
+    const scanPath = join(MONOREPO_WORK_DIR, pkg);
+    const result = spawnSync(
+      process.execPath,
+      [DIST_CLI, 'scan', scanPath, '--packages', TARGET_PACKAGES],
+      {
+        env: process.env,
+        encoding: 'utf-8',
+        timeout: 60_000,
+      },
+    );
+    if (result.status !== 0) {
+      const err = (result.stderr || result.stdout || '').slice(0, 500);
+      throw new Error(`Scan failed for monorepo ${pkg}:\n${err}`);
     }
   }
 
@@ -112,9 +145,9 @@ after(() => {
 
 // ─── Assertions ───────────────────────────────────────────────────────────────
 
-test('list_projects returns exactly 6 projects', async () => {
+test('list_projects returns exactly 9 projects', async () => {
   const rows = await callTool('list_projects', {});
-  assert.equal(rows.length, 6, `Expected 6 projects, got ${rows.length}: ${JSON.stringify(rows.map(r => r.project_id))}`);
+  assert.equal(rows.length, 9, `Expected 9 projects, got ${rows.length}: ${JSON.stringify(rows.map(r => r.project_id))}`);
 });
 
 test('list_packages includes @acme/ui and @acme/utils', async () => {
@@ -217,12 +250,12 @@ test('query_dependency_versions: react 18.2.0 is present', async () => {
   );
 });
 
-test('get_scan_metadata: project_count is 6', async () => {
+test('get_scan_metadata: project_count is 9', async () => {
   const meta = await callTool('get_scan_metadata', {});
   assert.equal(
     meta.project_count,
-    6,
-    `Expected project_count=6, got ${meta.project_count}`,
+    9,
+    `Expected project_count=9, got ${meta.project_count}`,
   );
 });
 
@@ -291,7 +324,7 @@ test('dashboard data loader outputs valid JSON with correct shape', () => {
   assert.ok(Array.isArray(parsed.packageManagerCounts), 'packageManagerCounts should be an array');
 
   // Data correctness
-  assert.equal(parsed.projects.length, 6, `Expected 6 projects, got ${parsed.projects.length}`);
+  assert.equal(parsed.projects.length, 9, `Expected 9 projects, got ${parsed.projects.length}`);
   assert.ok(parsed.totalComponentUsages > 0, 'totalComponentUsages should be > 0');
   assert.ok(parsed.totalFunctionUsages > 0, 'totalFunctionUsages should be > 0');
 
@@ -428,9 +461,12 @@ test('git history: web-app snapshots span at least 5 months', async () => {
   );
 });
 
-test('git history: all 6 projects have ≥5 snapshot rows after full history scan', async () => {
+test('git history: original 6 projects have ≥5 snapshot rows after full history scan', async () => {
+  // Only run against the original 6 projects — new fixtures have fewer commits
+  const originalWorkProjects = WORK_PROJECTS.slice(0, 6);
+
   // Scan all remaining projects with full history (web-app was already scanned in the --history test)
-  for (const workPath of WORK_PROJECTS.slice(1)) {
+  for (const workPath of originalWorkProjects.slice(1)) {
     const scanResult = spawnSync(
       process.execPath,
       [DIST_CLI, 'scan', workPath, '--packages', TARGET_PACKAGES, '--history', String(MAX_HISTORY_DEPTH)],
@@ -446,7 +482,7 @@ test('git history: all 6 projects have ≥5 snapshot rows after full history sca
   const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
 
   const p = requireParquet('project_snapshots');
-  for (const workPath of WORK_PROJECTS) {
+  for (const workPath of originalWorkProjects) {
     const slug = computeProjectSlug(workPath);
     const rows = await queryParquet(
       `SELECT COUNT(*) AS cnt
@@ -665,5 +701,207 @@ test('after checkpoint scan build, project_snapshots has rows across date range'
   assert.ok(
     spanDays >= 150,
     `Expected code_at to span ≥150 days after checkpoint scan, got ${Math.round(spanDays)} days (oldest: ${oldest}, newest: ${newest})`,
+  );
+});
+
+// ─── Subdirectory package.json detection tests ────────────────────────────────
+
+test('frontend-subdir: package manager detected as pnpm from frontend/pnpm-lock.yaml', async () => {
+  // The frontend-subdir project has no root-level package.json — only frontend/package.json.
+  // The scanner should detect the lockfile in the frontend/ subdirectory and report pnpm.
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const frontendSubdirWorkPath = WORK_PROJECTS[6]; // apps/frontend-subdir
+  const slug = computeProjectSlug(frontendSubdirWorkPath);
+
+  const p = requireParquet('project_snapshots');
+  const rows = await queryParquet(
+    `SELECT package_manager
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}'
+       AND is_latest = true`
+  );
+
+  assert.ok(rows.length >= 1, `Expected at least 1 snapshot for frontend-subdir (slug: ${slug})`);
+  assert.equal(
+    rows[0].package_manager,
+    'pnpm',
+    `Expected pnpm detected from frontend/pnpm-lock.yaml, got: ${rows[0].package_manager}`,
+  );
+});
+
+test('frontend-subdir: dependencies read from frontend/package.json', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const frontendSubdirWorkPath = WORK_PROJECTS[6]; // apps/frontend-subdir
+  const slug = computeProjectSlug(frontendSubdirWorkPath);
+
+  const p = requireParquet('dependencies');
+  const rows = await queryParquet(
+    `SELECT DISTINCT package_name
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}'
+       AND is_latest = true`
+  );
+
+  const names = rows.map((r) => r.package_name);
+  assert.ok(
+    names.includes('@acme/ui'),
+    `Expected @acme/ui in frontend-subdir dependencies, got: ${JSON.stringify(names)}`,
+  );
+  assert.ok(
+    names.includes('@acme/utils'),
+    `Expected @acme/utils in frontend-subdir dependencies, got: ${JSON.stringify(names)}`,
+  );
+});
+
+test('frontend-subdir: component and function usages are captured', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const frontendSubdirWorkPath = WORK_PROJECTS[6]; // apps/frontend-subdir
+  const slug = computeProjectSlug(frontendSubdirWorkPath);
+
+  const cuPath = requireParquet('component_usages');
+  const fuPath = requireParquet('function_usages');
+
+  const [componentRows, functionRows] = await Promise.all([
+    queryParquet(
+      `SELECT component_name FROM read_parquet('${cuPath.replace(/'/g, "''")}')
+       WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`
+    ),
+    queryParquet(
+      `SELECT export_name FROM read_parquet('${fuPath.replace(/'/g, "''")}')
+       WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`
+    ),
+  ]);
+
+  const components = componentRows.map((r) => r.component_name);
+  const functions = functionRows.map((r) => r.export_name);
+
+  assert.ok(
+    components.includes('Button'),
+    `Expected Button component usage in frontend-subdir, got: ${JSON.stringify(components)}`,
+  );
+  assert.ok(
+    components.includes('Badge'),
+    `Expected Badge component usage in frontend-subdir, got: ${JSON.stringify(components)}`,
+  );
+  assert.ok(
+    functions.includes('formatDate'),
+    `Expected formatDate function usage in frontend-subdir, got: ${JSON.stringify(functions)}`,
+  );
+});
+
+// ─── Monorepo workspace package tests ────────────────────────────────────────
+
+test('monorepo/packages/web: package manager detected as pnpm from root lockfile', async () => {
+  // The packages/web directory has no lockfile — pnpm-lock.yaml is at the monorepo root.
+  // findLockfileDir should traverse up and detect pnpm.
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const webPath = join(MONOREPO_WORK_DIR, 'packages/web');
+  const slug = computeProjectSlug(webPath);
+
+  const p = requireParquet('project_snapshots');
+  const rows = await queryParquet(
+    `SELECT package_manager
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`
+  );
+
+  assert.ok(rows.length >= 1, `Expected at least 1 snapshot for monorepo web (slug: ${slug})`);
+  assert.equal(
+    rows[0].package_manager,
+    'pnpm',
+    `Expected pnpm from root lockfile for monorepo web, got: ${rows[0].package_manager}`,
+  );
+});
+
+test('monorepo/packages/api: package manager detected as pnpm from root lockfile', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const apiPath = join(MONOREPO_WORK_DIR, 'packages/api');
+  const slug = computeProjectSlug(apiPath);
+
+  const p = requireParquet('project_snapshots');
+  const rows = await queryParquet(
+    `SELECT package_manager
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`
+  );
+
+  assert.ok(rows.length >= 1, `Expected at least 1 snapshot for monorepo api (slug: ${slug})`);
+  assert.equal(
+    rows[0].package_manager,
+    'pnpm',
+    `Expected pnpm from root lockfile for monorepo api, got: ${rows[0].package_manager}`,
+  );
+});
+
+test('monorepo/packages/web: @acme/ui and @acme/utils appear in component/function usages', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const webPath = join(MONOREPO_WORK_DIR, 'packages/web');
+  const slug = computeProjectSlug(webPath);
+
+  const cuPath = requireParquet('component_usages');
+  const rows = await queryParquet(
+    `SELECT component_name, package_name
+     FROM read_parquet('${cuPath.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`
+  );
+
+  const components = rows.map((r) => r.component_name);
+  assert.ok(
+    components.includes('Button'),
+    `Expected Button in monorepo web component usages, got: ${JSON.stringify(components)}`,
+  );
+});
+
+test('monorepo/packages/api: @acme/utils functions are captured', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const apiPath = join(MONOREPO_WORK_DIR, 'packages/api');
+  const slug = computeProjectSlug(apiPath);
+
+  const fuPath = requireParquet('function_usages');
+  const rows = await queryParquet(
+    `SELECT export_name
+     FROM read_parquet('${fuPath.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`
+  );
+
+  const functions = rows.map((r) => r.export_name);
+  assert.ok(
+    functions.includes('formatDate') || functions.includes('formatCurrency') || functions.includes('debounce'),
+    `Expected @acme/utils function usages in monorepo api, got: ${JSON.stringify(functions)}`,
+  );
+});
+
+test('monorepo packages are treated as separate projects', async () => {
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const webSlug = computeProjectSlug(join(MONOREPO_WORK_DIR, 'packages/web'));
+  const apiSlug = computeProjectSlug(join(MONOREPO_WORK_DIR, 'packages/api'));
+
+  assert.notEqual(webSlug, apiSlug, 'Monorepo workspace packages should have distinct project slugs');
+
+  const rows = await callTool('list_projects', {});
+  const projectIds = rows.map((r) => r.project_id);
+
+  assert.ok(
+    projectIds.includes(webSlug),
+    `Expected monorepo web package (${webSlug}) in project list: ${JSON.stringify(projectIds)}`,
+  );
+  assert.ok(
+    projectIds.includes(apiSlug),
+    `Expected monorepo api package (${apiSlug}) in project list: ${JSON.stringify(projectIds)}`,
   );
 });

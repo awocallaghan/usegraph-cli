@@ -8,7 +8,7 @@
  */
 import fg from 'fast-glob';
 import { existsSync, readFileSync, statSync } from 'fs';
-import { basename, join } from 'path';
+import { basename, dirname, join } from 'path';
 import { spawnSync } from 'child_process';
 import { analyzeFile } from './file-analyzer.js';
 import { analyzeProjectMeta } from './meta-analyzer.js';
@@ -72,6 +72,58 @@ function getCommitTimestamp(projectPath: string): string | null {
   return gitRaw(projectPath, ['log', '-1', '--format=%cI', 'HEAD']);
 }
 
+/**
+ * Find the directory that owns the `package.json` governing this project.
+ *
+ * Priority:
+ *   1. `projectPath` itself (root-level package.json — the common case).
+ *   2. A single immediate subdirectory that contains a package.json, e.g.
+ *      `frontend/package.json`.  When multiple subdirectories each have their
+ *      own package.json (monorepo root), we fall back to `projectPath` so the
+ *      caller keeps its normal behaviour.
+ *
+ * Returns the resolved package-root directory (always an absolute path).
+ */
+export function findPackageRoot(projectPath: string): string {
+  if (existsSync(join(projectPath, 'package.json'))) return projectPath;
+
+  const hits = fg.sync('*/package.json', {
+    cwd: projectPath,
+    ignore: ['**/node_modules/**'],
+  });
+
+  // Exactly one subdirectory package.json → use that directory
+  if (hits.length === 1) {
+    return join(projectPath, dirname(hits[0]));
+  }
+
+  return projectPath;
+}
+
+/**
+ * Find the directory that contains the project's lockfile, starting at
+ * `packageRoot` and walking up the directory tree (up to 4 levels).
+ *
+ * This allows workspace packages inside a monorepo to locate the root-level
+ * lockfile that pnpm / yarn / npm writes at the workspace root rather than
+ * inside each individual package directory.
+ *
+ * Returns `packageRoot` when no lockfile is found anywhere in the chain.
+ */
+export function findLockfileDir(packageRoot: string): string {
+  const lockfiles = ['pnpm-lock.yaml', 'yarn.lock', 'package-lock.json', 'bun.lock', 'bun.lockb'];
+  let dir = packageRoot;
+
+  for (let i = 0; i < 4; i++) {
+    if (lockfiles.some((lf) => existsSync(join(dir, lf)))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break; // filesystem root reached
+    dir = parent;
+  }
+
+  return packageRoot; // fallback: no lockfile found
+}
+
 function readPackageJson(projectPath: string): Record<string, unknown> | null {
   const pkgPath = join(projectPath, 'package.json');
   if (!existsSync(pkgPath)) return null;
@@ -88,7 +140,8 @@ function readPackageJson(projectPath: string): Record<string, unknown> | null {
  * path aliases (e.g. webpack/Vite aliases like `@components/Button`).
  */
 function readKnownPackages(projectPath: string): Set<string> {
-  const pkg = readPackageJson(projectPath);
+  const packageRoot = findPackageRoot(projectPath);
+  const pkg = readPackageJson(packageRoot);
   if (!pkg) return new Set();
   const names: string[] = [];
   for (const field of ['dependencies', 'devDependencies'] as const) {
@@ -99,13 +152,20 @@ function readKnownPackages(projectPath: string): Set<string> {
 }
 
 /**
- * Detect the lockfile present in `projectPath` and parse it into a resolved
- * version map.  Priority order mirrors meta-analyzer's packageManager detection:
- * pnpm > bun (no lockfile parser yet) > yarn > npm.
+ * Detect the lockfile present at or above `projectPath` and parse it into a
+ * resolved version map.  Priority order mirrors meta-analyzer's packageManager
+ * detection: pnpm > bun (no lockfile parser yet) > yarn > npm.
+ *
+ * When the project is a workspace package inside a monorepo, the lockfile
+ * typically lives at the workspace root rather than inside the package
+ * directory — `findLockfileDir` walks up the tree to locate it.
  *
  * Returns an empty map when no supported lockfile is found or parsing fails.
  */
 function detectAndParseLockfile(projectPath: string): Map<string, ResolvedDependency> {
+  const packageRoot = findPackageRoot(projectPath);
+  const lockfileDir = findLockfileDir(packageRoot);
+
   const candidates: Array<{ file: string; parse: (content: string) => Map<string, ResolvedDependency> }> = [
     {
       file: 'pnpm-lock.yaml',
@@ -125,7 +185,7 @@ function detectAndParseLockfile(projectPath: string): Map<string, ResolvedDepend
   ];
 
   for (const { file, parse } of candidates) {
-    const lockPath = join(projectPath, file);
+    const lockPath = join(lockfileDir, file);
     if (!existsSync(lockPath)) continue;
     try {
       const content = readFileSync(lockPath, 'utf-8');
@@ -141,6 +201,9 @@ function detectAndParseLockfile(projectPath: string): Map<string, ResolvedDepend
 export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
   const { projectPath, targetPackages, config, onProgress, concurrency = 8, cacheDir } = opts;
   const targetSet = new Set(targetPackages);
+
+  // Locate the package.json — it may live in a subdirectory (e.g. frontend/)
+  const packageRoot = findPackageRoot(projectPath);
   const knownPackages = readKnownPackages(projectPath);
 
   // Load incremental cache (returns a blank cache when disabled or cold)
@@ -207,7 +270,11 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
   }
 
   const summary = buildSummary(results, targetPackages);
-  const meta = analyzeProjectMeta(projectPath);
+
+  // Pass the located lockfile directory so analyzeProjectMeta can detect the
+  // package manager even when the lockfile lives at the monorepo root.
+  const lockfileDir = findLockfileDir(packageRoot);
+  const meta = analyzeProjectMeta(packageRoot, lockfileDir);
 
   // Resolve installed versions from the lockfile and enrich the scan result
   const resolvedVersions = detectAndParseLockfile(projectPath);
@@ -224,7 +291,7 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
     repoUrl: getRepoUrl(projectPath),
     branch: getBranch(projectPath),
     commitSha,
-    packageJson: readPackageJson(projectPath),
+    packageJson: readPackageJson(packageRoot),
     targetPackages,
     internalPackages: config.internalPackages ?? [],
     fileCount: files.length,

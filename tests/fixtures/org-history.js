@@ -1866,15 +1866,241 @@ export function debounce<T extends (...args: Parameters<T>) => ReturnType<T>>(
   ],
 };
 
+// ── apps/frontend-subdir ──────────────────────────────────────────────────────
+// React + Vite + pnpm. The package.json and lockfile live inside frontend/,
+// not at the repository root — exercises subdirectory detection.
+
+const frontendSubdirHistory = {
+  remote: 'https://github.com/test-org/frontend-subdir.git',
+  commits: [
+    {
+      date: daysAgo(60),
+      message: 'feat: initial frontend setup in subdirectory',
+      files: {
+        'frontend/package.json': JSON.stringify({
+          name: 'frontend-subdir-app',
+          version: '0.1.0',
+          private: true,
+          dependencies: {
+            '@acme/ui': '^1.0.0',
+            react: '^18.2.0',
+            'react-dom': '^18.2.0',
+          },
+          devDependencies: {
+            '@vitejs/plugin-react': '^4.0.0',
+            typescript: '^5.1.6',
+            vite: '^4.4.7',
+          },
+          scripts: { dev: 'vite', build: 'tsc && vite build' },
+        }, null, 2),
+        'frontend/pnpm-lock.yaml': `\
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@acme/ui':
+        specifier: ^1.0.0
+        version: 1.0.0
+      react:
+        specifier: ^18.2.0
+        version: 18.2.0
+      react-dom:
+        specifier: ^18.2.0
+        version: 18.2.0(react@18.2.0)
+    devDependencies:
+      '@vitejs/plugin-react':
+        specifier: ^4.0.0
+        version: 4.0.0(vite@4.4.7)
+      typescript:
+        specifier: ^5.1.6
+        version: 5.1.6
+      vite:
+        specifier: ^4.4.7
+        version: 4.4.7(@types/node@20.4.5)
+
+packages:
+
+  '@acme/ui@1.0.0':
+    resolution: {integrity: sha512-stub}
+
+  'react@18.2.0':
+    resolution: {integrity: sha512-stub}
+
+  'react-dom@18.2.0':
+    resolution: {integrity: sha512-stub}
+    peerDependencies:
+      react: ^18.2.0
+
+  'vite@4.4.7':
+    resolution: {integrity: sha512-stub}
+`,
+        'frontend/tsconfig.json': readFixture('apps/frontend-subdir', 'frontend/tsconfig.json'),
+        'frontend/vite.config.ts': readFixture('apps/frontend-subdir', 'frontend/vite.config.ts'),
+        'frontend/src/_gitmarker.ts': readFixture('apps/frontend-subdir', 'frontend/src/_gitmarker.ts'),
+        'frontend/src/App.tsx': `\
+import React from 'react';
+import { Button } from '@acme/ui';
+
+export function Dashboard() {
+  return (
+    <main>
+      <h1>Dashboard</h1>
+      <Button variant="primary">Get Started</Button>
+    </main>
+  );
+}
+
+export default Dashboard;
+`,
+      },
+    },
+    {
+      date: daysAgo(20),
+      message: 'feat: upgrade @acme/ui and add @acme/utils',
+      files: readAllFixtures('apps/frontend-subdir'),
+    },
+  ],
+};
+
+// ── apps/monorepo ─────────────────────────────────────────────────────────────
+// pnpm monorepo with two workspace packages: packages/web and packages/api.
+// A single root-level pnpm-lock.yaml covers all packages — exercises lockfile
+// traversal (findLockfileDir walking up from each workspace package directory).
+
+const monorepoHistory = {
+  remote: 'https://github.com/test-org/monorepo.git',
+  commits: [
+    {
+      date: daysAgo(70),
+      message: 'feat: initial monorepo setup',
+      files: {
+        // Monorepo root
+        'package.json': readFixture('apps/monorepo', 'package.json'),
+        'pnpm-workspace.yaml': readFixture('apps/monorepo', 'pnpm-workspace.yaml'),
+        'pnpm-lock.yaml': `\
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies: {}
+
+  packages/web:
+    dependencies:
+      '@acme/ui':
+        specifier: ^1.0.0
+        version: 1.0.0
+      react:
+        specifier: ^18.2.0
+        version: 18.2.0
+      react-dom:
+        specifier: ^18.2.0
+        version: 18.2.0(react@18.2.0)
+
+  packages/api:
+    dependencies:
+      '@acme/utils':
+        specifier: ^0.4.0
+        version: 0.4.0
+
+packages:
+
+  '@acme/ui@1.0.0':
+    resolution: {integrity: sha512-stub}
+
+  '@acme/utils@0.4.0':
+    resolution: {integrity: sha512-stub}
+
+  'react@18.2.0':
+    resolution: {integrity: sha512-stub}
+
+  'react-dom@18.2.0':
+    resolution: {integrity: sha512-stub}
+    peerDependencies:
+      react: ^18.2.0
+`,
+        // packages/web
+        'packages/web/package.json': JSON.stringify({
+          name: '@monorepo/web',
+          version: '0.1.0',
+          private: true,
+          dependencies: {
+            '@acme/ui': '^1.0.0',
+            react: '^18.2.0',
+            'react-dom': '^18.2.0',
+          },
+          devDependencies: { typescript: '^5.1.6', vite: '^4.4.7' },
+          scripts: { dev: 'vite', build: 'vite build' },
+        }, null, 2),
+        'packages/web/tsconfig.json': readFixture('apps/monorepo', 'packages/web/tsconfig.json'),
+        'packages/web/src/_gitmarker.ts': readFixture('apps/monorepo', 'packages/web/src/_gitmarker.ts'),
+        'packages/web/src/App.tsx': `\
+import React, { useState } from 'react';
+import { Button } from '@acme/ui';
+
+export function ProjectList() {
+  const [open, setOpen] = useState(false);
+  return (
+    <section>
+      <h2>Projects</h2>
+      <Button variant="primary" onClick={() => setOpen(true)}>New Project</Button>
+    </section>
+  );
+}
+
+export default ProjectList;
+`,
+        // packages/api
+        'packages/api/package.json': JSON.stringify({
+          name: '@monorepo/api',
+          version: '0.1.0',
+          private: true,
+          dependencies: { '@acme/utils': '^0.4.0' },
+          devDependencies: { typescript: '^5.1.6' },
+          scripts: { build: 'tsc' },
+        }, null, 2),
+        'packages/api/tsconfig.json': readFixture('apps/monorepo', 'packages/api/tsconfig.json'),
+        'packages/api/src/_gitmarker.ts': readFixture('apps/monorepo', 'packages/api/src/_gitmarker.ts'),
+        'packages/api/src/index.ts': `\
+export function placeholder() { return null; }
+`,
+      },
+    },
+    {
+      date: daysAgo(15),
+      message: 'feat: add @acme/utils to web and full api usage',
+      files: {
+        'pnpm-lock.yaml': readFixture('apps/monorepo', 'pnpm-lock.yaml'),
+        'packages/web/package.json': readFixture('apps/monorepo', 'packages/web/package.json'),
+        'packages/web/src/App.tsx': readFixture('apps/monorepo', 'packages/web/src/App.tsx'),
+        'packages/api/package.json': readFixture('apps/monorepo', 'packages/api/package.json'),
+        'packages/api/src/index.ts': readFixture('apps/monorepo', 'packages/api/src/index.ts'),
+      },
+    },
+  ],
+};
+
 // ── Exports ───────────────────────────────────────────────────────────────────
 
 export const ORG_HISTORY = {
-  'apps/web-app':   webAppHistory,
-  'apps/dashboard': dashboardHistory,
-  'apps/docs':      docsHistory,
-  'apps/mobile':    mobileHistory,
-  'packages/ui':    uiHistory,
-  'packages/utils': utilsHistory,
+  'apps/web-app':         webAppHistory,
+  'apps/dashboard':       dashboardHistory,
+  'apps/docs':            docsHistory,
+  'apps/mobile':          mobileHistory,
+  'packages/ui':          uiHistory,
+  'packages/utils':       utilsHistory,
+  'apps/frontend-subdir': frontendSubdirHistory,
+  'apps/monorepo':        monorepoHistory,
 };
 
 /**
