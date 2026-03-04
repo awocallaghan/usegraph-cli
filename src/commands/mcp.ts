@@ -318,17 +318,51 @@ async function toolQueryComponentAdoptionTrend(args: {
   const compFilter = args.component_name
     ? `AND component_name = '${sqlStr(args.component_name)}'`
     : '';
+  // Carry-forward CTE: for each month in the window, count projects whose most recent scan
+  // up to that month showed them using the package. This ensures projects last scanned before
+  // the window still contribute their last known state rather than being silently dropped.
   return queryParquet(`
+    WITH
+      months AS (
+        SELECT date_trunc('month', current_date - INTERVAL (g) MONTH)::DATE AS period
+        FROM (SELECT unnest(generate_series(0, ${months - 1})) AS g)
+      ),
+      project_scan_months AS (
+        SELECT DISTINCT
+          project_id,
+          date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::DATE AS scan_month
+        FROM read_parquet('${sqlStr(p)}')
+        WHERE (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)
+          ${pkgFilter}
+          ${compFilter}
+      ),
+      latest_per_project_month AS (
+        SELECT
+          m.period,
+          psm.project_id,
+          MAX(psm.scan_month) AS latest_scan_month
+        FROM months m
+        JOIN project_scan_months psm ON psm.scan_month <= m.period
+        GROUP BY m.period, psm.project_id
+      ),
+      adopters AS (
+        SELECT DISTINCT
+          project_id,
+          date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::DATE AS scan_month
+        FROM read_parquet('${sqlStr(p)}')
+        WHERE (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)
+          ${pkgFilter}
+          ${compFilter}
+      )
     SELECT
-      date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::VARCHAR AS period,
-      COUNT(DISTINCT project_id)::INTEGER                 AS adopting_projects
-    FROM read_parquet('${sqlStr(p)}')
-    WHERE (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)
-      ${pkgFilter}
-      ${compFilter}
-      AND COALESCE(code_at, scanned_at)::TIMESTAMP >= current_timestamp - INTERVAL ${months} MONTH
-    GROUP BY date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)
-    ORDER BY period
+      lpm.period::VARCHAR AS period,
+      COUNT(DISTINCT lpm.project_id)::INTEGER AS adopting_projects
+    FROM latest_per_project_month lpm
+    JOIN adopters a
+      ON a.project_id = lpm.project_id
+      AND a.scan_month = lpm.latest_scan_month
+    GROUP BY lpm.period
+    ORDER BY lpm.period
   `);
 }
 
@@ -384,17 +418,51 @@ async function toolQueryExportAdoptionTrend(args: {
   const months = typeof args.period_months === 'number' ? args.period_months : 12;
   const pkgFilter = `AND package_name = '${sqlStr(args.package_name)}'`;
   const expFilter = `AND export_name = '${sqlStr(args.export_name)}'`;
+  // Carry-forward CTE: for each month in the window, count projects whose most recent scan
+  // up to that month showed them calling this export. This ensures projects last scanned before
+  // the window still contribute their last known state rather than being silently dropped.
   return queryParquet(`
+    WITH
+      months AS (
+        SELECT date_trunc('month', current_date - INTERVAL (g) MONTH)::DATE AS period
+        FROM (SELECT unnest(generate_series(0, ${months - 1})) AS g)
+      ),
+      project_scan_months AS (
+        SELECT DISTINCT
+          project_id,
+          date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::DATE AS scan_month
+        FROM read_parquet('${sqlStr(p)}')
+        WHERE (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)
+          ${pkgFilter}
+          ${expFilter}
+      ),
+      latest_per_project_month AS (
+        SELECT
+          m.period,
+          psm.project_id,
+          MAX(psm.scan_month) AS latest_scan_month
+        FROM months m
+        JOIN project_scan_months psm ON psm.scan_month <= m.period
+        GROUP BY m.period, psm.project_id
+      ),
+      adopters AS (
+        SELECT DISTINCT
+          project_id,
+          date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::DATE AS scan_month
+        FROM read_parquet('${sqlStr(p)}')
+        WHERE (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)
+          ${pkgFilter}
+          ${expFilter}
+      )
     SELECT
-      date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::VARCHAR AS period,
-      COUNT(DISTINCT project_id)::INTEGER                 AS adopting_projects
-    FROM read_parquet('${sqlStr(p)}')
-    WHERE (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)
-      ${pkgFilter}
-      ${expFilter}
-      AND COALESCE(code_at, scanned_at)::TIMESTAMP >= current_timestamp - INTERVAL ${months} MONTH
-    GROUP BY date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)
-    ORDER BY period
+      lpm.period::VARCHAR AS period,
+      COUNT(DISTINCT lpm.project_id)::INTEGER AS adopting_projects
+    FROM latest_per_project_month lpm
+    JOIN adopters a
+      ON a.project_id = lpm.project_id
+      AND a.scan_month = lpm.latest_scan_month
+    GROUP BY lpm.period
+    ORDER BY lpm.period
   `);
 }
 
@@ -649,7 +717,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_component_adoption_trend',
-      description: 'Show how many projects adopted a component (or an entire package) over time, grouped by month.',
+      description: 'Show how many projects adopted a component (or an entire package) over time, grouped by month. Each month reflects each project\'s last known state as of that month — projects not scanned within the window are carried forward from their most recent scan, so the count accurately represents adoption rather than scan activity.',
       schema: z.object({
         package_name: z.string().describe('npm package name'),
         component_name: z.string().optional().describe('Optional: filter to a specific component'),
@@ -678,7 +746,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_export_adoption_trend',
-      description: 'Show how many projects call a specific function export over time, grouped by month.',
+      description: 'Show how many projects call a specific function export over time, grouped by month. Each month reflects each project\'s last known state as of that month — projects not scanned within the window are carried forward from their most recent scan, so the count accurately represents adoption rather than scan activity.',
       schema: z.object({
         package_name: z.string().describe('npm package name'),
         export_name: z.string().describe('Exported function name'),
