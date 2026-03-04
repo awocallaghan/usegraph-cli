@@ -660,8 +660,10 @@ test('after checkpoint scan build, project_snapshots has rows across date range'
 
   assert.ok(rows.length === 1 && rows[0].oldest, 'Expected code_at data for web-app');
   const spanDays = Number(rows[0].span_days);
+  const oldest = String(rows[0].oldest);
+  const newest = String(rows[0].newest);
   assert.ok(
     spanDays >= 150,
-    `Expected code_at to span ≥150 days after checkpoint scan, got ${Math.round(spanDays)} days`,
+    `Expected code_at to span ≥150 days after checkpoint scan, got ${Math.round(spanDays)} days (oldest: ${oldest}, newest: ${newest})`,
   );
 });
