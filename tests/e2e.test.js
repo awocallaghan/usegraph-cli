@@ -65,10 +65,6 @@ const WORK_PROJECTS = [];
 
 const DIST_CLI = resolve(__dirname, '..', 'dist', 'index.js');
 const TARGET_PACKAGES = '@acme/ui,@acme/utils';
-const normalizeTimestampValue = (value) => {
-  if (value && typeof value === 'object' && 'value' in value) return value.value;
-  return value;
-};
 
 // ─── Setup / teardown ─────────────────────────────────────────────────────────
 
@@ -412,18 +408,20 @@ test('git history: web-app snapshots span at least 5 months', async () => {
 
   const p = requireParquet('project_snapshots');
   const rows = await queryParquet(
-    `SELECT MIN(code_at) AS oldest, MAX(code_at) AS newest
+    `SELECT DATE_DIFF('day', MIN(code_at), MAX(code_at)) AS span_days,
+            CAST(MIN(code_at) AS VARCHAR) AS oldest,
+            CAST(MAX(code_at) AS VARCHAR) AS newest
      FROM read_parquet('${p.replace(/'/g, "''")}')
-     WHERE project_id = '${slug.replace(/'/g, "''")}'
-       AND code_at IS NOT NULL`
+      WHERE project_id = '${slug.replace(/'/g, "''")}'
+        AND code_at IS NOT NULL`
   );
 
   assert.ok(rows.length === 1 && rows[0].oldest && rows[0].newest,
     'Expected code_at data for web-app');
 
-  const oldest = normalizeTimestampValue(rows[0].oldest);
-  const newest = normalizeTimestampValue(rows[0].newest);
-  const spanDays = (new Date(newest) - new Date(oldest)) / (1000 * 60 * 60 * 24);
+  const spanDays = Number(rows[0].span_days);
+  const oldest = String(rows[0].oldest);
+  const newest = String(rows[0].newest);
   assert.ok(
     spanDays >= 150,
     `Expected code_at to span ≥150 days, got ${Math.round(spanDays)} days (oldest: ${oldest}, newest: ${newest})`,
@@ -651,16 +649,17 @@ test('after checkpoint scan build, project_snapshots has rows across date range'
   const p = requireParquet('project_snapshots');
 
   const rows = await queryParquet(
-    `SELECT MIN(code_at) AS oldest, MAX(code_at) AS newest, COUNT(*) AS cnt
+    `SELECT DATE_DIFF('day', MIN(code_at), MAX(code_at)) AS span_days,
+            CAST(MIN(code_at) AS VARCHAR) AS oldest,
+            CAST(MAX(code_at) AS VARCHAR) AS newest,
+            COUNT(*) AS cnt
      FROM read_parquet('${p.replace(/'/g, "''")}')
-     WHERE project_id = '${slug.replace(/'/g, "''")}'
-       AND code_at IS NOT NULL`
+      WHERE project_id = '${slug.replace(/'/g, "''")}'
+        AND code_at IS NOT NULL`
   );
 
   assert.ok(rows.length === 1 && rows[0].oldest, 'Expected code_at data for web-app');
-  const oldest = normalizeTimestampValue(rows[0].oldest);
-  const newest = normalizeTimestampValue(rows[0].newest);
-  const spanDays = (new Date(newest) - new Date(oldest)) / (1000 * 60 * 60 * 24);
+  const spanDays = Number(rows[0].span_days);
   assert.ok(
     spanDays >= 150,
     `Expected code_at to span ≥150 days after checkpoint scan, got ${Math.round(spanDays)} days`,
