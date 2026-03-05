@@ -152,6 +152,61 @@ test('extracts namespace JSX member: <DS.Button />', async () => {
   assert.equal(componentUsages[0].importedFrom, '@myds/core');
 });
 
+test('extracts named import member JSX: <Button.TaskButton />', async () => {
+  const src = `
+    import { Button } from '@acme/ui';
+    const el = <Button.TaskButton />;
+  `;
+  const { componentUsages } = await extract(src, ['@acme/ui'], true, ['@acme/ui']);
+  assert.equal(componentUsages.length, 1);
+  assert.equal(componentUsages[0].componentName, 'Button.TaskButton');
+  assert.equal(componentUsages[0].importedFrom, '@acme/ui');
+});
+
+test('extracts default import member JSX: <Button.TaskButton />', async () => {
+  const src = `
+    import Button from '@acme/ui';
+    const el = <Button.TaskButton />;
+  `;
+  const { componentUsages } = await extract(src, ['@acme/ui'], true, ['@acme/ui']);
+  assert.equal(componentUsages.length, 1);
+  assert.equal(componentUsages[0].componentName, 'Button.TaskButton');
+  assert.equal(componentUsages[0].importedFrom, '@acme/ui');
+});
+
+test('normalizes renamed named import member: <Btn.TaskButton /> → Button.TaskButton', async () => {
+  const src = `
+    import { Button as Btn } from '@acme/ui';
+    const el = <Btn.TaskButton />;
+  `;
+  const { componentUsages } = await extract(src, ['@acme/ui'], true, ['@acme/ui']);
+  assert.equal(componentUsages.length, 1);
+  assert.equal(componentUsages[0].componentName, 'Button.TaskButton');
+  assert.equal(componentUsages[0].importedFrom, '@acme/ui');
+});
+
+test('does not extract JSX member when base is not an import', async () => {
+  const src = `
+    const LocalComponent = { Sub: () => null };
+    const el = <LocalComponent.Sub />;
+  `;
+  const { componentUsages } = await extract(src, [], true);
+  assert.equal(componentUsages.length, 0);
+});
+
+test('extracts props for named import member JSX: <Button.TaskButton variant="primary" />', async () => {
+  const src = `
+    import { Button } from '@acme/ui';
+    const el = <Button.TaskButton variant="primary" />;
+  `;
+  const { componentUsages } = await extract(src, ['@acme/ui'], true, ['@acme/ui']);
+  assert.equal(componentUsages.length, 1);
+  assert.equal(componentUsages[0].componentName, 'Button.TaskButton');
+  const variantProp = componentUsages[0].props.find(p => p.name === 'variant');
+  assert.ok(variantProp, 'variant prop should exist');
+  assert.equal(variantProp.value, 'primary');
+});
+
 test('does not extract JSX from non-target packages', async () => {
   const src = `
     import { Button } from 'other-lib';

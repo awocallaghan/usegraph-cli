@@ -303,7 +303,7 @@ function resolveJsxName(
     return { componentName: null, packageSource: null };
   }
 
-  // Member expression: <DS.Button>
+  // Member expression: <DS.Button> or <Button.TaskButton> (named/default import)
   if (nameNode.type === 'JSXMemberExpression') {
     const obj = nameNode['object'] as AstNode;
     const prop = nameNode['property'] as AstNode;
@@ -312,6 +312,17 @@ function resolveJsxName(
     if (objName && propName) {
       const ns = namespaceMap.get(objName);
       if (ns) return { componentName: `${objName}.${propName}`, packageSource: ns };
+
+      // Named or default import used as a component namespace:
+      // import { Button } from '@acme/ui' → <Button.TaskButton />
+      const importEntry = importMap.get(objName);
+      if (importEntry) {
+        const baseName = importEntry.imported === 'default' ? objName : importEntry.imported;
+        return {
+          componentName: `${baseName}.${propName}`,
+          packageSource: importEntry.source,
+        };
+      }
     }
     return { componentName: null, packageSource: null };
   }
