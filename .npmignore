@@ -1,0 +1,7 @@
+# Observable build output — guard against it landing in dist/ if observable build
+# is run from the wrong directory (should live in src/dashboard/dist/ instead)
+dist/_duckdb/
+dist/_file/
+dist/_npm/
+dist/_observablehq/
+dist/*.html
