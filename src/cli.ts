@@ -36,6 +36,7 @@ export function createCli(): Command {
     .command('scan [path]')
     .description('Scan a project and record detailed package usage')
     .option('-p, --packages <packages>', 'Comma-separated list of packages to track')
+    .option('--force', 'Re-scan even if this commit was already scanned')
     .option('--since <period>', 'Start of range: relative (1y, 6m, 2w, 30d) or absolute ISO date (2024-01-01)')
     .option('--until <period>', 'End of range (default: now); same format as --since')
     .option('--interval <period>', 'Checkpoint interval — one commit sampled per bucket (e.g. 1m, 2w, 7d)')

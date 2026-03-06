@@ -4,6 +4,7 @@
  * Usage:
  *   usegraph scan [path]
  *     --packages <pkg1,pkg2,...>   packages to track in detail
+ *     --force                     re-scan even if this commit was already scanned
  *     --since <period>            scan commits from this date (e.g. 6m, 2w, 2024-01-01)
  *     --until <period>            end of range (default: now)
  *     --interval <period>         sample one commit per bucket (e.g. 1m, 2w, 7d)
@@ -33,6 +34,7 @@ import {
 
 export interface ScanCommandOptions {
   packages?: string;
+  force?: boolean;
   since?: string;
   until?: string;
   interval?: string;
@@ -79,14 +81,14 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
     return;
   }
 
-  // Deduplication: skip if this commit was already scanned
-  if (cacheDir) {
+  // Deduplication: skip if this commit was already scanned (unless --force)
+  if (!opts.force && cacheDir) {
     const commitSha = getCommitSha(projectPath);
     if (commitSha) {
       const existingId = getScanIdForCommit(cacheDir, commitSha);
       if (existingId) {
         const shortSha = commitSha.slice(0, 7);
-        console.log(chalk.green(`✓ Already scanned commit ${shortSha} — skipping`));
+        console.log(chalk.green(`✓ Already scanned commit ${shortSha} — skipping (use --force to re-scan)`));
         return;
       }
     }
