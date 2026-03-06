@@ -388,7 +388,6 @@ test('--since/--interval scans checkpoint commits (downsampled)', async () => {
   const newScans = afterIds.length - beforeCount;
 
   // The fixture has commits spread over ~180 days, so 6 monthly buckets should fire
-  // (some commits may already be scanned from --history tests; newScans may be 0)
   // Assert that total scans is now in a reasonable range: 3–12 unique monthly checkpoints
   assert.ok(
     afterIds.length >= 3,

@@ -60,6 +60,7 @@ Scans a project directory and saves detailed package usage data to `~/.usegraph/
 ```
 Options:
   -p, --packages <packages>    Comma-separated list of packages to track
+  --force                      Re-scan even if this commit was already scanned
   --since <period>             Scan commits from this date (e.g. 6m, 2w, 2024-01-01)
   --until <period>             End of range (default: now); same format as --since
   --interval <period>          Sample one commit per bucket (e.g. 1m, 2w, 7d)
@@ -99,8 +100,8 @@ trend queries and `is_latest` computation.
 **Deduplication**
 
 When a project is inside a git repository, the scan ID is set to the commit SHA.
-Running `usegraph scan` twice on the same commit will produce the same ID and
-overwrite the previous result.
+Running `usegraph scan` twice on the same commit will skip the second scan automatically.
+Use `--force` to override this and re-scan a commit that has already been scanned.
 
 **Checkpoint scanning (`--since`)**
 
