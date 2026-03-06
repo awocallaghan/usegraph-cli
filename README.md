@@ -1,9 +1,17 @@
 # usegraph-cli
 
+[![CI](https://github.com/awocallaghan/usegraph-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/awocallaghan/usegraph-cli/actions/workflows/ci.yml)
+
 A CLI tool for analysing how npm packages are used across your projects and organisation.
 Track React component props, function call arguments, import patterns, and more.
 Collect tech-stack metadata to understand your organisation's tooling landscape.
-Expose analysis results as an MCP server so AI assistants can query your data directly.
+Expose analysis results as a web dashboard or MCP server so your team and AI assistants can query your data directly.
+
+## Why usegraph?
+
+Large organisations running shared component libraries or internal packages face a common problem: **you don't know how your packages are actually used**. How many projects use `<Button variant="danger">`? Which teams are still on v1? Who calls `createTheme` with a second argument?
+
+usegraph solves this by scanning the AST of every project, recording precise usage data — props, call arguments, import patterns, resolved versions — and persisting it as Parquet tables that can be explored interactively via a built-in web dashboard or queried by AI assistants through an MCP server.
 
 ## Features
 
@@ -16,10 +24,13 @@ Expose analysis results as an MCP server so AI assistants can query your data di
 - **Multi-project scanning**: run scans across many projects; results saved globally to `~/.usegraph/`
 - **Parquet materialisation**: `usegraph build` compresses all scan JSON into 6 typed Parquet tables
   queryable with DuckDB
+- **Web dashboard**: `usegraph dashboard` launches an interactive Observable Framework app for
+  exploring component adoption, dependency versions, and project detail
 - **MCP server**: `usegraph mcp` exposes 13 tools over stdio so Claude (and other MCP clients)
   can query your organisation's usage data directly
 - **Tech stack detection**: detect build tools, test frameworks, linters, package managers, and more
 - **Dependency reporting**: count and categorise all npm dependencies with resolved versions
+- **Checkpoint scanning**: scan historical commits with `--since` / `--interval` to build adoption trend data
 
 ## Installation
 
@@ -34,20 +45,17 @@ npx usegraph-cli scan
 ## Quick Start
 
 ```bash
-# 1. (Optional) Create a config file specifying which files to include/exclude
-usegraph init ./my-project
-
-# 2. Scan one or more projects
+# 1. Scan one or more projects
 usegraph scan ./apps/web --packages @acme/ui,@acme/utils
 usegraph scan ./apps/mobile --packages @acme/ui,@acme/utils
 
-# 3. Build Parquet tables from all scans
+# 2. Build Parquet tables from all scans
 usegraph build
 
-# 4. Launch the web dashboard
+# 3. Launch the web dashboard
 usegraph dashboard
 
-# 5. Or start an MCP server for AI-assisted analysis
+# 4. Or start an MCP server for AI-assisted analysis
 usegraph mcp
 ```
 
@@ -376,6 +384,8 @@ src/
   types.ts                  # TypeScript interfaces
   config.ts                 # Config file loader (usegraph.config.json)
   storage.ts                # JSON persistence layer
+  git-history.ts            # Git log walking for --since / --interval checkpoint scans
+  parquet-query.ts          # Shared DuckDB query helpers
   analyzer/
     walker.ts               # Generic recursive SWC AST walker
     extractor.ts            # Import/JSX/call extraction from AST (with sourceSnippet)
@@ -386,11 +396,20 @@ src/
   commands/
     scan.ts                 # scan command handler
     build.ts                # build command — reads JSON scans, writes Parquet via DuckDB
-    dashboard.ts            # dashboard command — launches Observable Framework
+    dashboard.ts            # dashboard command — launches Observable Framework dev server
     mcp.ts                  # mcp command — MCP server (13 tools, JSON-RPC 2.0 over stdio)
+  dashboard/
+    observablehq.config.js  # Observable Framework configuration
+    pages/
+      index.md              # Dashboard home (scan overview, project list)
+      dependencies.md       # Dependency version explorer
+      package-adoption.md   # Component / export adoption over time
+      project-detail.md     # Per-project tooling and usage detail
+      component-explorer.md # JSX prop explorer
+      function-explorer.md  # Function argument explorer
 ```
 
-## Development
+## Local Development
 
 ```bash
 # Install dependencies
@@ -400,12 +419,42 @@ pnpm install
 pnpm build
 
 # Type-check only (no emit)
-node node_modules/.bin/tsc --noEmit
+pnpm lint
 
-# Run tests
+# Run unit and e2e tests
 pnpm test
-# or: node --test tests/*.test.js
 
-# Run after building
-node dist/index.js --help
+# Run dashboard Playwright tests (requires a build first)
+pnpm build && pnpm test:dashboard
+
+# Start the CLI in development mode (no build step needed)
+pnpm dev -- scan ./path/to/project --packages some-package
+
+# Start the dashboard dev server (hot-reload, requires usegraph build data)
+pnpm dev:dashboard
 ```
+
+> **Tip:** Set `USEGRAPH_HOME` to a temporary directory when developing to avoid
+> polluting your real `~/.usegraph/` data:
+> ```bash
+> USEGRAPH_HOME=/tmp/usegraph-dev usegraph scan ./my-project --packages my-pkg
+> USEGRAPH_HOME=/tmp/usegraph-dev usegraph build
+> USEGRAPH_HOME=/tmp/usegraph-dev usegraph dashboard
+> ```
+
+## Contributing
+
+Contributions are welcome! Please follow these steps:
+
+1. **Fork** the repository and create a feature branch.
+2. **Install** dependencies with `pnpm install`.
+3. **Make** your changes, keeping commits focused and descriptive.
+4. **Test** your changes:
+   - `pnpm lint` — TypeScript type-check
+   - `pnpm test` — unit and e2e tests
+   - `pnpm build && pnpm test:dashboard` — if you touched the dashboard
+5. **Open a pull request** against `main` with a clear description of the change
+   and any relevant issue numbers.
+
+Please keep pull requests small and focused. For larger changes, open an issue first
+to discuss the approach.
