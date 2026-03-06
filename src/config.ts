@@ -9,8 +9,6 @@ const CONFIG_FILENAMES = [
 ];
 
 export const DEFAULT_CONFIG: UsegraphConfig = {
-  targetPackages: [],
-  internalPackages: [],
   include: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.mjs', '**/*.cjs'],
   exclude: [
     '**/node_modules/**',
@@ -24,9 +22,6 @@ export const DEFAULT_CONFIG: UsegraphConfig = {
     '**/.next/**',
     '**/.nuxt/**',
   ],
-  // Empty string means "use the global ~/.usegraph/<slug> store".
-  // A non-empty value (e.g. ".usegraph") overrides to a project-local directory.
-  outputDir: '',
 };
 
 export function loadConfig(projectPath: string): UsegraphConfig {
@@ -51,20 +46,14 @@ export function loadConfig(projectPath: string): UsegraphConfig {
 
 function mergeConfig(defaults: UsegraphConfig, overrides: Partial<UsegraphConfig>): UsegraphConfig {
   return {
-    targetPackages: overrides.targetPackages ?? defaults.targetPackages,
-    internalPackages: overrides.internalPackages ?? defaults.internalPackages,
     include: overrides.include ?? defaults.include,
     exclude: overrides.exclude ?? defaults.exclude,
-    outputDir: overrides.outputDir ?? defaults.outputDir,
   };
 }
 
 export function writeDefaultConfig(projectPath: string): void {
   const configPath = join(projectPath, 'usegraph.config.json');
-  // Omit outputDir so the global ~/.usegraph/<slug> store is used by default.
-  // Users can add "outputDir": ".usegraph" to opt into project-local storage.
   const config = {
-    targetPackages: ['your-package-name'],
     include: [...DEFAULT_CONFIG.include],
     exclude: [...DEFAULT_CONFIG.exclude],
   };

@@ -15,14 +15,12 @@ import * as http from 'http';
 import { resolve } from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
-import { loadConfig } from '../config.js';
 import { computeProjectSlug } from '../analyzer/project-identity.js';
 import { createStorageBackend } from '../storage/index.js';
 import type { ScanResult } from '../types.js';
 
 export interface ServeCommandOptions {
   port?: string;
-  output?: string;
   open?: boolean;
 }
 
@@ -36,9 +34,8 @@ export async function runServe(
   const results: ScanResult[] = [];
   for (const p of paths) {
     const projectPath = resolve(p);
-    const config = loadConfig(projectPath);
     const projectSlug = computeProjectSlug(projectPath);
-    const backend = createStorageBackend(projectPath, projectSlug, opts, config);
+    const backend = createStorageBackend(projectSlug);
     const result = backend.loadLatest();
     if (result) {
       results.push(result);

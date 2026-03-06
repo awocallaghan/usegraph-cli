@@ -131,7 +131,7 @@ before(async () => {
   }
 
   // 2. Build Parquet tables
-  await runBuild({});
+  await runBuild();
 });
 
 after(() => {
@@ -348,18 +348,15 @@ test('dashboard data loader outputs valid JSON with correct shape', () => {
   );
 });
 
-// ─── codeAt and --history tests ──────────────────────────────────────────────
+// ─── codeAt tests ─────────────────────────────────────────────────────────────
 
 test('scanned projects have codeAt set from git', async () => {
-  const { loadLatestScanResult } = await import('../dist/storage.js');
   const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
   const { createStorageBackend } = await import('../dist/storage/index.js');
-  const { loadConfig } = await import('../dist/config.js');
 
   const projectPath = WORK_PROJECTS[0];
-  const config = loadConfig(projectPath);
   const slug = computeProjectSlug(projectPath);
-  const backend = createStorageBackend(projectPath, slug, {}, config);
+  const backend = createStorageBackend(slug);
   const result = backend.loadLatest();
 
   assert.ok(result, 'should have a scan result');
@@ -368,147 +365,16 @@ test('scanned projects have codeAt set from git', async () => {
   assert.equal(result.id, result.commitSha, 'id should equal commitSha for git repos');
 });
 
-test('--history scans multiple commits and writes separate scan files', async () => {
-  const projectPath = WORK_PROJECTS[0];
-  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
-  const { createStorageBackend } = await import('../dist/storage/index.js');
-  const { loadConfig } = await import('../dist/config.js');
-
-  const result = spawnSync(
-    process.execPath,
-    [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES, '--history', String(MAX_HISTORY_DEPTH)],
-    {
-      env: process.env,
-      encoding: 'utf-8',
-      timeout: 120_000,
-    },
-  );
-  assert.equal(result.status, 0, `--history scan failed:\n${result.stderr || result.stdout}`);
-
-  const config = loadConfig(projectPath);
-  const slug = computeProjectSlug(projectPath);
-  const backend = createStorageBackend(projectPath, slug, {}, config);
-  const scanIds = backend.list();
-  assert.ok(scanIds.length >= 8, `Expected ≥8 scan files after --history ${MAX_HISTORY_DEPTH}, got ${scanIds.length}`);
-
-  // Re-running --history should be idempotent (same files, no duplicates)
-  const result2 = spawnSync(
-    process.execPath,
-    [DIST_CLI, 'scan', projectPath, '--packages', TARGET_PACKAGES, '--history', String(MAX_HISTORY_DEPTH)],
-    {
-      env: process.env,
-      encoding: 'utf-8',
-      timeout: 120_000,
-    },
-  );
-  assert.equal(result2.status, 0, `second --history scan failed`);
-  const scanIds2 = backend.list();
-  assert.equal(scanIds2.length, scanIds.length, 'Re-running --history should be idempotent');
-});
-
-test('after --history build, Parquet has multiple rows and correct is_latest', async () => {
-  // Re-build with the history scans included
-  await runBuild({});
-
-  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
-  const projectPath = WORK_PROJECTS[0];
-  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
-  const slug = computeProjectSlug(projectPath);
-
-  const p = requireParquet('project_snapshots');
-  const rows = await queryParquet(
-    `SELECT project_id, scanned_at, code_at, is_latest
-     FROM read_parquet('${p.replace(/'/g, "''")}')
-     WHERE project_id = '${slug.replace(/'/g, "''")}'
-     ORDER BY code_at DESC NULLS LAST`
-  );
-
-  assert.ok(rows.length >= 8, `Expected ≥8 snapshot rows for ${slug}, got ${rows.length}`);
-  const latestRows = rows.filter(r => r.is_latest);
-  assert.equal(latestRows.length, 1, 'Exactly one row should have is_latest = true');
-  // The latest row should be first (most recent code_at)
-  assert.ok(latestRows[0].code_at != null || latestRows[0].scanned_at != null, 'Latest row should have a timestamp');
-});
-
-// ─── History depth validation tests ──────────────────────────────────────────
-
-test('git history: web-app snapshots span at least 5 months', async () => {
-  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
-  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
-
-  const projectPath = WORK_PROJECTS[0];
-  const slug = computeProjectSlug(projectPath);
-
-  const p = requireParquet('project_snapshots');
-  const rows = await queryParquet(
-    `SELECT DATE_DIFF('day', CAST(MIN(code_at) AS TIMESTAMP), CAST(MAX(code_at) AS TIMESTAMP)) AS span_days,
-            CAST(MIN(code_at) AS VARCHAR) AS oldest,
-            CAST(MAX(code_at) AS VARCHAR) AS newest
-     FROM read_parquet('${p.replace(/'/g, "''")}')
-      WHERE project_id = '${slug.replace(/'/g, "''")}'
-        AND code_at IS NOT NULL`
-  );
-
-  assert.ok(rows.length === 1 && rows[0].oldest && rows[0].newest,
-    'Expected code_at data for web-app');
-
-  const spanDays = Number(rows[0].span_days);
-  const oldest = String(rows[0].oldest);
-  const newest = String(rows[0].newest);
-  assert.ok(
-    spanDays >= 150,
-    `Expected code_at to span ≥150 days, got ${Math.round(spanDays)} days (oldest: ${oldest}, newest: ${newest})`,
-  );
-});
-
-test('git history: original 6 projects have ≥5 snapshot rows after full history scan', async () => {
-  // Only run against the original 6 projects — new fixtures have fewer commits
-  const originalWorkProjects = WORK_PROJECTS.slice(0, 6);
-
-  // Scan all remaining projects with full history (web-app was already scanned in the --history test)
-  for (const workPath of originalWorkProjects.slice(1)) {
-    const scanResult = spawnSync(
-      process.execPath,
-      [DIST_CLI, 'scan', workPath, '--packages', TARGET_PACKAGES, '--history', String(MAX_HISTORY_DEPTH)],
-      { env: process.env, encoding: 'utf-8', timeout: 120_000 },
-    );
-    assert.equal(scanResult.status, 0, `--history scan failed for ${workPath}:\n${scanResult.stderr || scanResult.stdout}`);
-  }
-
-  // Rebuild Parquet with all history scans included
-  await runBuild({});
-
-  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
-  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
-
-  const p = requireParquet('project_snapshots');
-  for (const workPath of originalWorkProjects) {
-    const slug = computeProjectSlug(workPath);
-    const rows = await queryParquet(
-      `SELECT COUNT(*) AS cnt
-       FROM read_parquet('${p.replace(/'/g, "''")}')
-       WHERE project_id = '${slug.replace(/'/g, "''")}'`
-    );
-    const count = Number(rows[0].cnt);
-    assert.ok(
-      count >= 5,
-      `Expected ≥5 snapshot rows for ${slug}, got ${count}`,
-    );
-  }
-});
-
 // ─── --since / --interval checkpoint scan tests ───────────────────────────────
 
 test('--since/--interval scans checkpoint commits (downsampled)', async () => {
   const projectPath = WORK_PROJECTS[0]; // web-app: 180-day history
   const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
   const { createStorageBackend } = await import('../dist/storage/index.js');
-  const { loadConfig } = await import('../dist/config.js');
 
   // Count scans before to establish baseline
-  const config = loadConfig(projectPath);
   const slug = computeProjectSlug(projectPath);
-  const backend = createStorageBackend(projectPath, slug, {}, config);
+  const backend = createStorageBackend(slug);
   const beforeCount = backend.list().length;
 
   const result = spawnSync(
@@ -548,11 +414,9 @@ test('--since without --interval scans all commits in range', async () => {
   const projectPath = WORK_PROJECTS[1]; // dashboard: also has 180-day history
   const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
   const { createStorageBackend } = await import('../dist/storage/index.js');
-  const { loadConfig } = await import('../dist/config.js');
 
-  const config = loadConfig(projectPath);
   const slug = computeProjectSlug(projectPath);
-  const backend = createStorageBackend(projectPath, slug, {}, config);
+  const backend = createStorageBackend(slug);
   const beforeCount = backend.list().length;
 
   // Use a very short window (3d) — only the most recent commits qualify
@@ -569,21 +433,6 @@ test('--since without --interval scans all commits in range', async () => {
   assert.ok(afterCount >= beforeCount, 'Scan count should not decrease');
 });
 
-test('--history and --since conflict → exit code 1 with clear error', () => {
-  const projectPath = WORK_PROJECTS[0];
-
-  const result = spawnSync(
-    process.execPath,
-    [DIST_CLI, 'scan', projectPath, '--history', '5', '--since', '6m'],
-    { env: process.env, encoding: 'utf-8', timeout: 15_000 },
-  );
-  assert.equal(result.status, 1, `Expected exit code 1, got ${result.status}`);
-  const output = (result.stderr || '') + (result.stdout || '');
-  assert.ok(
-    output.includes('cannot be combined'),
-    `Expected "cannot be combined" in error output, got:\n${output.slice(0, 500)}`,
-  );
-});
 
 test('--interval without --since → exit code 1 with clear error', () => {
   const projectPath = WORK_PROJECTS[0];
@@ -624,11 +473,9 @@ test('--since: inactive project (no commits in range) gets a baseline scan pinne
 
     const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
     const { createStorageBackend } = await import('../dist/storage/index.js');
-    const { loadConfig } = await import('../dist/config.js');
 
-    const config = loadConfig(tmpRoot);
     const slug = computeProjectSlug(tmpRoot);
-    const backend = createStorageBackend(tmpRoot, slug, {}, config);
+    const backend = createStorageBackend(slug);
 
     const beforeCount = backend.list().length;
     assert.equal(beforeCount, 0, 'No scans should exist before running --since');
@@ -675,7 +522,7 @@ test('--since: inactive project (no commits in range) gets a baseline scan pinne
 
 test('after checkpoint scan build, project_snapshots has rows across date range', async () => {
   // Rebuild to include any newly added checkpoint scans
-  await runBuild({});
+  await runBuild();
 
   const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
   const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');

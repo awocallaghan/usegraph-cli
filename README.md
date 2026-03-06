@@ -34,7 +34,7 @@ npx usegraph-cli scan
 ## Quick Start
 
 ```bash
-# 1. (Optional) Create a config file specifying which packages to track
+# 1. (Optional) Create a config file specifying which files to include/exclude
 usegraph init ./my-project
 
 # 2. Scan one or more projects
@@ -44,10 +44,10 @@ usegraph scan ./apps/mobile --packages @acme/ui,@acme/utils
 # 3. Build Parquet tables from all scans
 usegraph build
 
-# 4. Query via the terminal report
-usegraph report ./apps/web --files
+# 4. Launch the web dashboard
+usegraph dashboard
 
-# 5. Or launch an MCP server for AI-assisted analysis
+# 5. Or start an MCP server for AI-assisted analysis
 usegraph mcp
 ```
 
@@ -60,12 +60,9 @@ Scans a project directory and saves detailed package usage data to `~/.usegraph/
 ```
 Options:
   -p, --packages <packages>    Comma-separated list of packages to track
-  -c, --config <path>          Path to usegraph config file
-  -o, --output <dir>           Output directory for results (default: .usegraph)
-  --concurrency <n>            Number of files to analyse in parallel (default: 8)
-  --json                       Print raw JSON result to stdout instead of saving
-  --force                      Re-scan even if this commit was already scanned
-  --history [n]                Scan the last N commits of git history (default: 10)
+  --since <period>             Scan commits from this date (e.g. 6m, 2w, 2024-01-01)
+  --until <period>             End of range (default: now); same format as --since
+  --interval <period>          Sample one commit per bucket (e.g. 1m, 2w, 7d)
 ```
 
 **Examples:**
@@ -80,17 +77,11 @@ usegraph scan ./packages/web-app --packages @acme/ui,@acme/icons
 # Track all imports (no filter)
 usegraph scan ./my-project
 
-# Stream JSON output for further processing
-usegraph scan ./my-project --packages react --json | jq '.summary'
+# Scan commits from the last 6 months, one per month
+usegraph scan --packages @acme/ui --since 6m --interval 1m
 
-# Re-scan even if this commit has already been scanned
-usegraph scan --packages @acme/ui --force
-
-# Scan the last 10 commits (default) to build a usage history
-usegraph scan --packages @acme/ui --history
-
-# Scan the last 50 commits
-usegraph scan --packages @acme/ui --history 50
+# Scan all commits in the last 2 weeks
+usegraph scan --packages @acme/ui --since 2w
 ```
 
 **`codeAt` vs `scannedAt`**
@@ -103,35 +94,28 @@ Each scan records two timestamps:
   git repository.
 
 When `codeAt` is available, it is used as the authoritative "code date" for
-trend queries and `is_latest` computation. This means that running `--history`
-will correctly attribute older scans to their original commit dates even if
-those scans were executed recently.
+trend queries and `is_latest` computation.
 
 **Deduplication**
 
 When a project is inside a git repository, the scan ID is set to the commit SHA.
 Running `usegraph scan` twice on the same commit will produce the same ID and
-overwrite the previous result. Use `--force` to skip the check and overwrite
-unconditionally.
+overwrite the previous result.
 
-**History scanning**
+**Checkpoint scanning (`--since`)**
 
-`--history [N]` walks `git log` for the last N commits and scans each one in
-isolation using `git worktree`, without modifying the working tree. Already-scanned
-commits are skipped automatically (idempotent). Progress is reported per commit.
+`--since <period>` walks `git log` for commits in the given range and scans each
+one in isolation using `git worktree`, without modifying the working tree.
+Already-scanned commits are skipped automatically (idempotent). Use `--interval`
+to sample one commit per time bucket (e.g. one per month).
 
 ---
 
-### `usegraph build [--rebuild]`
+### `usegraph build`
 
 Reads all scan JSON files from `~/.usegraph/` and materialises 6 typed Parquet tables
 in `~/.usegraph/built/` using DuckDB. Run this after scanning to prepare data for
-`usegraph mcp`.
-
-```
-Options:
-  --rebuild    Drop and recreate all tables (default: incremental — skips existing rows)
-```
+`usegraph dashboard` and `usegraph mcp`.
 
 **Parquet output layout:**
 
@@ -151,9 +135,18 @@ Options:
 ```bash
 # Build (or refresh) all Parquet tables
 usegraph build
+```
 
-# Rebuild everything from scratch
-usegraph build --rebuild
+---
+
+### `usegraph dashboard`
+
+Launches the usegraph web dashboard. Requires `usegraph build` to have been run first.
+
+```
+Options:
+  -p, --port <n>   Port to listen on (default: 3000)
+  --open           Open the dashboard in the default browser automatically
 ```
 
 ---
@@ -206,83 +199,12 @@ Then ask Claude: *"Which projects use the Button component with a `variant` prop
 
 ---
 
-### `usegraph report [path]`
-
-Displays a formatted terminal report for the latest (or a specific) scan.
-
-```
-Options:
-  -s, --scan <id>              Load a specific scan by ID instead of the latest
-  --package <package>          Filter output to a single package
-  -o, --output <dir>           Output directory where results are stored (default: .usegraph)
-  --files                      Show file-level usage breakdown with props/args
-  --json                       Print raw JSON to stdout
-```
-
-**Examples:**
-
-```bash
-# Show summary report for the latest scan
-usegraph report ./my-project
-
-# Show detailed file-level breakdown
-usegraph report ./my-project --files
-
-# Filter to a specific package
-usegraph report ./my-project --package @acme/ui --files
-
-# View a previous scan by ID
-usegraph report ./my-project --scan <scan-id>
-
-# Export as JSON
-usegraph report ./my-project --json > report.json
-```
-
----
-
-### `usegraph dashboard [paths...]`
-
-Displays an aggregated dashboard across one or more projects. Compares component
-usage, function calls, and tech stack configuration across your organisation.
-
-```
-Options:
-  --package <package>          Filter to a specific package
-  -o, --output <dir>           Scan output dir within each project (default: .usegraph)
-  --json                       Print raw JSON to stdout
-```
-
-**Examples:**
-
-```bash
-# Dashboard for multiple projects
-usegraph dashboard ./apps/web ./apps/mobile ./packages/docs
-
-# Filter to a single package across projects
-usegraph dashboard ./apps/web ./apps/mobile --package @acme/ui
-
-# Export aggregated JSON
-usegraph dashboard ./apps/web ./apps/mobile --json > dashboard.json
-```
-
----
-
 ### `usegraph init [path]`
 
 Creates a `usegraph.config.json` in the project directory with sensible defaults.
 
 ```bash
 usegraph init ./my-project
-```
-
----
-
-### `usegraph scans [path]`
-
-Lists all saved scan IDs for a project.
-
-```bash
-usegraph scans ./my-project
 ```
 
 ---
@@ -312,10 +234,10 @@ usegraph scans ./my-project
                   │   function_usages.parquet                         │
                   │   function_arg_usages.parquet                     │
                   └──────────────────────┬───────────────────────────┘
-                                         │  usegraph mcp
+                                         │  usegraph dashboard / mcp
                                          ▼
                   ┌──────────────────────────────────────────────────┐
-                  │        MCP server (13 tools over stdio)           │
+                  │   Web dashboard  /  MCP server (13 tools)         │
                   │   Claude Desktop / Cursor / any MCP client        │
                   └──────────────────────────────────────────────────┘
 ```
@@ -326,26 +248,20 @@ Create a `usegraph.config.json` (or `.usegraphrc`) in your project root:
 
 ```json
 {
-  "targetPackages": ["@acme/ui", "@acme/icons"],
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": [
     "**/node_modules/**",
     "**/dist/**",
     "**/*.test.*",
     "**/*.spec.*"
-  ],
-  "outputDir": ".usegraph"
+  ]
 }
 ```
 
-| Field            | Default                              | Description                                       |
-|------------------|--------------------------------------|---------------------------------------------------|
-| `targetPackages` | `[]` (all packages)                  | Packages to analyse in detail                     |
-| `include`        | `["**/*.ts", "**/*.tsx", ...]`       | Glob patterns for files to include                |
-| `exclude`        | `["**/node_modules/**", ...]`        | Glob patterns for files to exclude                |
-| `outputDir`      | `.usegraph`                          | Directory to save scan results (relative to root) |
-
-When `targetPackages` is empty, **all** imported packages are tracked.
+| Field     | Default                              | Description                        |
+|-----------|--------------------------------------|------------------------------------|
+| `include` | `["**/*.ts", "**/*.tsx", ...]`       | Glob patterns for files to include |
+| `exclude` | `["**/node_modules/**", ...]`        | Glob patterns for files to exclude |
 
 ## Data Collected
 
@@ -468,9 +384,8 @@ src/
     lockfile.ts             # Lockfile parsers: npm, pnpm, yarn v1, yarn Berry v2+
   commands/
     scan.ts                 # scan command handler
-    report.ts               # report command handler
-    dashboard.ts            # dashboard command handler
     build.ts                # build command — reads JSON scans, writes Parquet via DuckDB
+    dashboard.ts            # dashboard command — launches Observable Framework
     mcp.ts                  # mcp command — MCP server (13 tools, JSON-RPC 2.0 over stdio)
 ```
 
@@ -484,7 +399,7 @@ pnpm install
 pnpm build
 
 # Type-check only (no emit)
-node node_modules/typescript/bin/tsc --noEmit
+node node_modules/.bin/tsc --noEmit
 
 # Run tests
 pnpm test
