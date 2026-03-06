@@ -1,4 +1,4 @@
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { homedir } from 'os';
 import {
   saveScanResult,
@@ -6,7 +6,7 @@ import {
   loadScanResult,
   listScans,
 } from '../storage.js';
-import type { ScanResult, UsegraphConfig } from '../types.js';
+import type { ScanResult } from '../types.js';
 import type { StorageBackend } from './backend.js';
 
 /**
@@ -43,21 +43,12 @@ export class FilesystemBackend implements StorageBackend {
   }
 
   /**
-   * Resolve the on-disk storage directory from the available configuration.
-   *
-   * Priority:
-   *   1. Explicit --output flag   → project-relative path
-   *   2. config.outputDir (set)   → project-relative path
-   *   3. Default                  → ~/.usegraph/<slug-segments...>
+   * Resolve the on-disk storage directory for a project.
+   * Always uses the global store: ~/.usegraph/<slug-segments...>
    */
   static resolveDir(
-    projectPath: string,
     projectSlug: string,
-    explicitOutput: string | undefined,
-    config: UsegraphConfig,
   ): string {
-    if (explicitOutput) return resolve(projectPath, explicitOutput);
-    if (config.outputDir) return resolve(projectPath, config.outputDir);
     // Slug may contain '/' separators (e.g. "github.com/org/repo") — split so
     // each segment becomes its own directory level under GLOBAL_STORE_ROOT.
     return join(GLOBAL_STORE_ROOT, ...projectSlug.split('/'));

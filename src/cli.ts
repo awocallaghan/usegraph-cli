@@ -4,13 +4,10 @@ import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 import { runScan } from './commands/scan.js';
-import { runView } from './commands/view.js';
 import { runDashboard } from './commands/dashboard.js';
 import { runBuild } from './commands/build.js';
 import { runMcp } from './commands/mcp.js';
-import { loadConfig, writeDefaultConfig } from './config.js';
-import { computeProjectSlug } from './analyzer/project-identity.js';
-import { createStorageBackend } from './storage/index.js';
+import { writeDefaultConfig } from './config.js';
 
 function getVersion(): string {
   try {
@@ -39,12 +36,7 @@ export function createCli(): Command {
     .command('scan [path]')
     .description('Scan a project and record detailed package usage')
     .option('-p, --packages <packages>', 'Comma-separated list of packages to track')
-    .option('-c, --config <path>', 'Path to usegraph config file')
-    .option('-o, --output <dir>', 'Output directory for results (default: ~/.usegraph/<slug>)')
-    .option('--concurrency <n>', 'Number of files to analyse in parallel (default: 8)')
-    .option('--json', 'Print raw JSON result to stdout instead of saving')
     .option('--force', 'Re-scan even if this commit was already scanned')
-    .option('--history [n]', 'Scan the last N commits of git history (default: 10)')
     .option('--since <period>', 'Start of range: relative (1y, 6m, 2w, 30d) or absolute ISO date (2024-01-01)')
     .option('--until <period>', 'End of range (default: now); same format as --since')
     .option('--interval <period>', 'Checkpoint interval — one commit sampled per bucket (e.g. 1m, 2w, 7d)')
@@ -58,24 +50,18 @@ export function createCli(): Command {
       }
     });
 
-  // ── view ──────────────────────────────────────────────────────────────────
+  // ── build ─────────────────────────────────────────────────────────────────
   program
-    .command('view')
-    .description('View scan results in the terminal (queries ~/.usegraph/built/ Parquet tables)')
-    .option('--project <slug>', 'Filter to a specific project slug')
-    .option('--package <package>', 'Filter output to a specific npm package')
-    .option('--framework <framework>', 'Filter projects by framework (e.g. "react", "next")')
-    .option('--build-tool <tool>', 'Filter projects by build tool (e.g. "vite", "webpack")')
-    .option('--component <component>', 'Show detail for a specific component (requires --package)')
-    .option('--export <export>', 'Show detail for a specific function export (requires --package)')
-    .option('--stale-days <n>', 'Flag projects not scanned within N days (default: 7)', parseInt)
-    .option('--json', 'Print raw JSON to stdout')
-    .action(async (opts) => {
+    .command('build')
+    .description(
+      'Materialise all scans from ~/.usegraph/ into Parquet tables in ~/.usegraph/built/',
+    )
+    .action(async () => {
       try {
-        await runView(opts);
+        await runBuild();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(chalk.red(`Error: ${message}`));
+        console.error(chalk.red(`Error during build: ${message}`));
         process.exit(1);
       }
     });
@@ -98,30 +84,12 @@ export function createCli(): Command {
       }
     });
 
-  // ── build ─────────────────────────────────────────────────────────────────
-  program
-    .command('build')
-    .description(
-      'Materialise all scans from ~/.usegraph/ into Parquet tables in ~/.usegraph/built/',
-    )
-    .option('--rebuild', 'Force a full rebuild even if Parquet files already exist')
-    .option('--verbose', 'Print per-table progress')
-    .action(async (opts: { rebuild?: boolean; verbose?: boolean }) => {
-      try {
-        await runBuild(opts);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(chalk.red(`Error during build: ${message}`));
-        process.exit(1);
-      }
-    });
-
   // ── mcp ───────────────────────────────────────────────────────────────────
   program
     .command('mcp')
     .description(
       'Start a Model Context Protocol (MCP) server over stdio.\n' +
-        'Exposes 13 tools for querying Parquet tables built by `usegraph build`.\n' +
+        'Exposes tools for querying Parquet tables built by `usegraph build`.\n' +
         'Add to your MCP client config: usegraph mcp',
     )
     .option('--verbose', 'Log method names to stderr')
@@ -148,31 +116,11 @@ export function createCli(): Command {
       try {
         writeDefaultConfig(projectPath);
         console.log(chalk.green(`✓ Created usegraph.config.json in ${projectPath}`));
-        console.log(chalk.dim('  Edit the file to specify which packages to track.'));
+        console.log(chalk.dim('  Edit the file to customise include/exclude patterns.'));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(chalk.red(`Error: Failed to write config file: ${message}`));
         process.exit(1);
-      }
-    });
-
-  // ── scans ─────────────────────────────────────────────────────────────────
-  program
-    .command('scans [path]')
-    .description('List all saved scans for a project')
-    .option('-o, --output <dir>', 'Output directory (default: ~/.usegraph/<slug>)')
-    .action((path: string | undefined, opts: { output?: string }) => {
-      const projectPath = resolve(path ?? process.cwd());
-      const config = loadConfig(projectPath);
-      const projectSlug = computeProjectSlug(projectPath);
-      const backend = createStorageBackend(projectPath, projectSlug, opts, config);
-      const ids = backend.list();
-      const storeDir = backend.getCacheDir();
-      if (ids.length === 0) {
-        console.log('No scans found. Run usegraph scan first.');
-      } else {
-        console.log(`Saved scans in ${storeDir}:`);
-        ids.forEach((id: string) => console.log(`  ${id}`));
       }
     });
 
