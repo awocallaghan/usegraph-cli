@@ -26,7 +26,7 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { initHistoricalRepo } from './helpers/git.js';
-import { ORG_HISTORY, MAX_HISTORY_DEPTH } from './fixtures/org-history.js';
+import { ORG_HISTORY } from './fixtures/org-history.js';
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
@@ -101,7 +101,7 @@ before(async () => {
   for (const workPath of WORK_PROJECTS) {
     const result = spawnSync(
       process.execPath,
-      [DIST_CLI, 'scan', workPath, '--packages', TARGET_PACKAGES, '--history', String(MAX_HISTORY_DEPTH)],
+      [DIST_CLI, 'scan', workPath, '--packages', TARGET_PACKAGES, '--since', '7m'],
       { env: { ...process.env, USEGRAPH_HOME }, encoding: 'utf-8', timeout: 60_000 },
     );
     if (result.status !== 0) {

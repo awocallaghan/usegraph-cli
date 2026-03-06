@@ -221,14 +221,8 @@ export interface ProjectMeta {
 
 /** Configuration file schema (usegraph.config.json / .usegraphrc) */
 export interface UsegraphConfig {
-  /** Packages to analyse in detail */
-  targetPackages: string[];
-  /** Package names (or prefixes ending with '/') that should be marked as internal in the dependencies table */
-  internalPackages: string[];
   /** Glob patterns for files to include (default: ts/tsx/js/jsx) */
   include: string[];
   /** Glob patterns for files to exclude */
   exclude: string[];
-  /** Directory (relative to project root) where scan results are saved */
-  outputDir: string;
 }

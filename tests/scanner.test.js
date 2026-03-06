@@ -73,10 +73,8 @@ export function useTimer(cb) {
 
 function makeConfig(extra = {}) {
   return {
-    targetPackages: [],
     include: ['**/*.ts', '**/*.tsx'],
     exclude: ['**/node_modules/**'],
-    outputDir: '.usegraph',
     ...extra,
   };
 }

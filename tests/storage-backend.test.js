@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
@@ -18,16 +18,6 @@ import { FilesystemBackend, GLOBAL_STORE_ROOT } from '../dist/storage/filesystem
 import { createStorageBackend } from '../dist/storage/index.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function makeConfig(extra = {}) {
-  return {
-    targetPackages: [],
-    include: ['**/*.ts', '**/*.tsx'],
-    exclude: ['**/node_modules/**'],
-    outputDir: '',
-    ...extra,
-  };
-}
 
 function makeScanResult(overrides = {}) {
   return {
@@ -53,39 +43,15 @@ function makeScanResult(overrides = {}) {
 
 // ─── FilesystemBackend.resolveDir tests ───────────────────────────────────────
 
-test('resolveDir: --output flag returns project-relative path', () => {
-  const projectPath = '/home/user/myapp';
-  const slug = 'github.com/org/myapp';
-  const config = makeConfig();
-
-  const dir = FilesystemBackend.resolveDir(projectPath, slug, '.usegraph', config);
-  assert.equal(dir, resolve(projectPath, '.usegraph'));
-});
-
-test('resolveDir: config.outputDir returns project-relative path', () => {
-  const projectPath = '/home/user/myapp';
-  const slug = 'github.com/org/myapp';
-  const config = makeConfig({ outputDir: '.usegraph' });
-
-  const dir = FilesystemBackend.resolveDir(projectPath, slug, undefined, config);
-  assert.equal(dir, resolve(projectPath, '.usegraph'));
-});
-
-test('resolveDir: empty config.outputDir returns global store path', () => {
-  const projectPath = '/home/user/myapp';
+test('resolveDir: single-component slug returns path under GLOBAL_STORE_ROOT', () => {
   const slug = 'my-pkg';
-  const config = makeConfig({ outputDir: '' });
-
-  const dir = FilesystemBackend.resolveDir(projectPath, slug, undefined, config);
+  const dir = FilesystemBackend.resolveDir(slug);
   assert.equal(dir, join(homedir(), '.usegraph', 'my-pkg'));
 });
 
 test('resolveDir: multi-component slug creates nested directories under GLOBAL_STORE_ROOT', () => {
-  const projectPath = '/home/user/myapp';
   const slug = 'github.com/org/repo';
-  const config = makeConfig({ outputDir: '' });
-
-  const dir = FilesystemBackend.resolveDir(projectPath, slug, undefined, config);
+  const dir = FilesystemBackend.resolveDir(slug);
   assert.equal(dir, join(homedir(), '.usegraph', 'github.com', 'org', 'repo'));
 });
 
@@ -161,20 +127,8 @@ test('backend.load() retrieves a specific scan by ID', () => {
 
 // ─── createStorageBackend factory test ───────────────────────────────────────
 
-test('createStorageBackend returns a working FilesystemBackend', () => {
-  const tmpDir = join(tmpdir(), `usegraph-backend-test-${randomUUID()}`);
-  mkdirSync(tmpDir, { recursive: true });
-  try {
-    // Use explicit --output so we control where it writes
-    const backend = createStorageBackend(tmpDir, 'test-slug', { output: tmpDir }, makeConfig());
-    assert.equal(backend.getCacheDir(), tmpDir);
-
-    const result = makeScanResult({ id: randomUUID() });
-    backend.save(result);
-    const loaded = backend.loadLatest();
-    assert.ok(loaded);
-    assert.equal(loaded.id, result.id);
-  } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
-  }
+test('createStorageBackend returns a FilesystemBackend pointing to GLOBAL_STORE_ROOT/<slug>', () => {
+  const slug = 'test-slug';
+  const backend = createStorageBackend(slug);
+  assert.equal(backend.getCacheDir(), join(homedir(), '.usegraph', slug));
 });

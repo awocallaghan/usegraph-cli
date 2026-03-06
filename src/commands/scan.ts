@@ -4,10 +4,10 @@
  * Usage:
  *   usegraph scan [path]
  *     --packages <pkg1,pkg2,...>   packages to track in detail
- *     --config <path>             path to config file
- *     --output <dir>              output directory (default: ~/.usegraph/<slug>)
- *     --concurrency <n>           parallel file workers (default: 8)
- *     --json                      print raw JSON result to stdout
+ *     --force                     re-scan even if this commit was already scanned
+ *     --since <period>            scan commits from this date (e.g. 6m, 2w, 2024-01-01)
+ *     --until <period>            end of range (default: now)
+ *     --interval <period>         sample one commit per bucket (e.g. 1m, 2w, 7d)
  */
 import chalk from 'chalk';
 import { existsSync } from 'fs';
@@ -34,12 +34,7 @@ import {
 
 export interface ScanCommandOptions {
   packages?: string;
-  config?: string;
-  output?: string;
-  concurrency?: string;
-  json?: boolean;
   force?: boolean;
-  history?: string | boolean;
   since?: string;
   until?: string;
   interval?: string;
@@ -53,46 +48,32 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
     process.exit(1);
   }
 
-  const config = loadConfig(opts.config ? resolve(opts.config) : projectPath);
+  const config = loadConfig(projectPath);
 
-  // CLI --packages overrides config
+  // CLI --packages determines which packages to track
   const targetPackages: string[] = opts.packages
     ? opts.packages.split(',').map((p) => p.trim()).filter(Boolean)
-    : config.targetPackages;
+    : [];
 
   if (targetPackages.length === 0) {
     console.warn(
       chalk.yellow(
         'Warning: No target packages specified. All imports will be tracked (this may be slow).\n' +
-          'Use --packages or add "targetPackages" to usegraph.config.json.',
+          'Use --packages to specify which packages to track.',
       ),
     );
   }
 
   const projectSlug = computeProjectSlug(projectPath);
-  const backend = createStorageBackend(projectPath, projectSlug, opts, config);
+  const backend = createStorageBackend(projectSlug);
   const cacheDir = backend.getCacheDir() ?? '';
 
-  // Mode dispatch
-  const hasHistory  = opts.history  !== undefined;
   const hasSince    = opts.since    !== undefined;
   const hasInterval = opts.interval !== undefined;
 
-  if (hasHistory && (hasSince || hasInterval)) {
-    console.error(chalk.red('Error: --history cannot be combined with --since or --interval. Use one mode at a time.'));
-    process.exit(1);
-  }
   if (hasInterval && !hasSince) {
     console.error(chalk.red('Error: --interval requires --since to define a start boundary.'));
     process.exit(1);
-  }
-
-  if (hasHistory) {
-    const n = opts.history === true || opts.history === 'true'
-      ? 10
-      : (parseInt(String(opts.history), 10) || 10);
-    await runHistoryScan(projectPath, n, opts, config, targetPackages, backend, cacheDir);
-    return;
   }
 
   if (hasSince) {
@@ -101,7 +82,7 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
   }
 
   // Deduplication: skip if this commit was already scanned (unless --force)
-  if (!opts.force && !opts.json && cacheDir) {
+  if (!opts.force && cacheDir) {
     const commitSha = getCommitSha(projectPath);
     if (commitSha) {
       const existingId = getScanIdForCommit(cacheDir, commitSha);
@@ -113,22 +94,12 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
     }
   }
 
-  const rawConcurrency = opts.concurrency !== undefined ? Number(opts.concurrency) : 8;
-  const concurrency = Number.isFinite(rawConcurrency) && rawConcurrency >= 1
-    ? Math.floor(rawConcurrency)
-    : 8;
-  if (opts.concurrency !== undefined && concurrency !== Math.floor(rawConcurrency)) {
-    console.warn(chalk.yellow(`Warning: Invalid --concurrency value "${opts.concurrency}", using default of 8.`));
-  }
-
-  const isGlobal = !opts.output && !config.outputDir;
-
   console.log(chalk.bold('usegraph scan'));
   console.log(chalk.dim(`  Project:  ${projectPath}`));
   if (targetPackages.length > 0) {
     console.log(chalk.dim(`  Packages: ${targetPackages.join(', ')}`));
   }
-  console.log(chalk.dim(`  Output:   ${cacheDir}${isGlobal ? chalk.dim(' (global)') : ''}`));
+  console.log(chalk.dim(`  Output:   ${cacheDir}`));
   console.log('');
 
   let lastLine = '';
@@ -143,7 +114,6 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
     projectPath,
     targetPackages,
     config,
-    concurrency,
     cacheDir,
     projectSlug,
     onProgress: (done, total, file, cached) => {
@@ -163,18 +133,12 @@ export async function runScan(projectPathArg: string | undefined, opts: ScanComm
     console.warn('');
   }
 
-  if (opts.json) {
-    console.log(JSON.stringify(result, null, 2));
-    return;
-  }
-
   backend.save(result);
 
   const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
   printScanSummary(result, elapsedSec);
   console.log('');
   console.log(chalk.green(`✓ Results saved to ${cacheDir}`));
-  console.log(chalk.dim(`  Run ${chalk.bold('usegraph report')} to view the analysis.`));
 }
 
 function printScanSummary(result: ScanResult, elapsedSec: string): void {
@@ -210,102 +174,13 @@ function printScanSummary(result: ScanResult, elapsedSec: string): void {
   }
 }
 
-// ─── History scanning ─────────────────────────────────────────────────────────
+// ─── Checkpoint scanning (--since / --until / --interval) ─────────────────────
 
 function gitRawSync(cwd: string, args: string[]): string | null {
   const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf-8' });
   if (r.error || r.status !== 0) return null;
   return r.stdout.trim() || null;
 }
-
-async function runHistoryScan(
-  projectPath: string,
-  n: number,
-  opts: ScanCommandOptions,
-  config: UsegraphConfig,
-  targetPackages: string[],
-  backend: StorageBackend,
-  cacheDir: string,
-): Promise<void> {
-  const projectSlug = computeProjectSlug(projectPath);
-
-  console.log(chalk.bold('usegraph scan --history'));
-  console.log(chalk.dim(`  Project:  ${projectPath}`));
-  console.log(chalk.dim(`  Commits:  ${n}`));
-  console.log('');
-
-  // Get the list of N commit SHAs
-  const logOutput = gitRawSync(projectPath, ['log', '--format=%H', `-n`, String(n)]);
-  if (!logOutput) {
-    console.error(chalk.red('Error: Unable to read git log. Is this a git repository?'));
-    process.exit(1);
-  }
-  const shas = logOutput.split('\n').filter(Boolean);
-  const total = shas.length;
-
-  let scanned = 0;
-  let skipped = 0;
-
-  for (let i = 0; i < shas.length; i++) {
-    const sha = shas[i];
-    const shortSha = sha.slice(0, 7);
-
-    // Skip already-scanned commits unless --force
-    if (!opts.force) {
-      const existingId = getScanIdForCommit(cacheDir, sha);
-      if (existingId) {
-        console.log(chalk.dim(`  [${i + 1}/${total}] Skipping ${shortSha} (already scanned)`));
-        skipped++;
-        continue;
-      }
-    }
-
-    // Get commit date for display
-    const commitDate = gitRawSync(projectPath, ['log', '-1', '--format=%cI', sha]) ?? '';
-    const dateDisplay = commitDate ? ` (${commitDate.slice(0, 10)})` : '';
-    console.log(chalk.dim(`  [${i + 1}/${total}] Scanning commit ${shortSha}${dateDisplay}`));
-
-    // Create a temporary worktree for this commit
-    const tmpDir = mkdtempSync(join(tmpdir(), `usegraph-worktree-`));
-    try {
-      const worktreeResult = spawnSync('git', ['-C', projectPath, 'worktree', 'add', tmpDir, sha], {
-        encoding: 'utf-8',
-      });
-      if (worktreeResult.error || worktreeResult.status !== 0) {
-        console.warn(chalk.yellow(`  Warning: Could not create worktree for ${shortSha}, skipping`));
-        continue;
-      }
-
-      const result: ScanResult = await scanProject({
-        projectPath: tmpDir,
-        targetPackages,
-        config,
-        cacheDir,
-        projectSlug,
-      });
-
-      // Mark as historical scan
-      result.isHistoricalScan = true;
-
-      backend.save(result);
-      scanned++;
-    } finally {
-      // Always clean up the worktree
-      spawnSync('git', ['-C', projectPath, 'worktree', 'remove', tmpDir, '--force'], {
-        encoding: 'utf-8',
-      });
-      try {
-        rmSync(tmpDir, { recursive: true, force: true });
-      } catch { /* ignore */ }
-    }
-  }
-
-  console.log('');
-  console.log(chalk.green(`✓ History scan complete: ${scanned} scanned, ${skipped} skipped`));
-  console.log(chalk.dim(`  Results saved to ${cacheDir}`));
-}
-
-// ─── Checkpoint scanning (--since / --until / --interval) ─────────────────────
 
 async function runCheckpointScan(
   projectPath: string,
@@ -414,13 +289,11 @@ async function runCheckpointScan(
       ? ` (baseline at ${commit.overrideCodeAt.slice(0, 10)})`
       : ` (${commit.date.slice(0, 10)})`;
 
-    if (!opts.force) {
-      const existingId = getScanIdForCommit(cacheDir, commit.sha);
-      if (existingId) {
-        console.log(chalk.dim(`  [${i + 1}/${total}] Skipping ${shortSha}${dateDisplay} (already scanned)`));
-        skipped++;
-        continue;
-      }
+    const existingId = getScanIdForCommit(cacheDir, commit.sha);
+    if (existingId) {
+      console.log(chalk.dim(`  [${i + 1}/${total}] Skipping ${shortSha}${dateDisplay} (already scanned)`));
+      skipped++;
+      continue;
     }
 
     console.log(chalk.dim(`  [${i + 1}/${total}] Scanning commit ${shortSha}${dateDisplay}`));
