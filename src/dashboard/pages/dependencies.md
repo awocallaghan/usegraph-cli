@@ -94,7 +94,7 @@ const selectedPkg = view(Inputs.select(
 ```
 
 ```js
-html`<p><a href="/package-adoption?package=${encodeURIComponent(selectedPkg)}">View ${selectedPkg} on Package Adoption →</a></p>`
+html`<p><a href="./package-adoption?package=${encodeURIComponent(selectedPkg)}">View ${selectedPkg} on Package Adoption →</a></p>`
 ```
 
 ```js

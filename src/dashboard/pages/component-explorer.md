@@ -361,7 +361,7 @@ if (!hasSelection) {
     const byFile = d3.group(projRows, d => d.file_path);
     return html`<details open>
       <summary style="font-weight:600;cursor:pointer;margin:1rem 0 0.5rem">
-        <a href="/project-detail?project=${encodeURIComponent(projectId)}">${projectId}</a>
+        <a href="./project-detail?project=${encodeURIComponent(projectId)}">${projectId}</a>
       </summary>
       ${Array.from(byFile, ([filePath, fileRows]) => {
         const fileUrl = buildFileUrl(projectId, filePath, fileRows[0]?.line);

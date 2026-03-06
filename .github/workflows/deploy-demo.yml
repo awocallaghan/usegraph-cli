@@ -42,6 +42,7 @@ jobs:
         working-directory: src/dashboard
         env:
           USEGRAPH_HOME: ${{ github.workspace }}/.dev-usegraph
+          BASE_PATH: /usegraph-cli
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

@@ -12,6 +12,7 @@ export default {
   title: "usegraph",
   root: "pages",
   output: join(__dirname, "dist"),
+  base: process.env.BASE_PATH,
   pages: [
     { name: "Overview", path: "/" },
     { name: "Dependencies", path: "/dependencies" },

@@ -169,7 +169,7 @@ adoptionByProject.length === 0
           y: "project_id",
           sort: { y: "-x" },
           tip: true,
-          href: d => `/project-detail?project=${encodeURIComponent(d.project_id)}`,
+          href: d => `./project-detail?project=${encodeURIComponent(d.project_id)}`,
           target: "_self",
         }),
         Plot.ruleX([0]),
@@ -181,7 +181,7 @@ adoptionByProject.length === 0
         columns: ["project_id"],
         header: { project_id: "Project" },
         format: {
-          project_id: (d) => html`<a href="/project-detail?project=${encodeURIComponent(d)}">${d}</a>`,
+          project_id: (d) => html`<a href="./project-detail?project=${encodeURIComponent(d)}">${d}</a>`,
         },
       })}
     </div>`
@@ -213,7 +213,7 @@ componentPopularity.length > 0
           y: "component_name",
           sort: { y: "-x" },
           tip: true,
-          href: d => `/component-explorer?package=${encodeURIComponent(packageFilter)}&component=${encodeURIComponent(d.component_name)}`,
+          href: d => `./component-explorer?package=${encodeURIComponent(packageFilter)}&component=${encodeURIComponent(d.component_name)}`,
           target: "_self",
         }),
         Plot.ruleX([0]),
@@ -248,7 +248,7 @@ functionPopularity.length > 0
           y: "export_name",
           sort: { y: "-x" },
           tip: true,
-          href: d => `/function-explorer?package=${encodeURIComponent(packageFilter)}&function=${encodeURIComponent(d.export_name)}`,
+          href: d => `./function-explorer?package=${encodeURIComponent(packageFilter)}&function=${encodeURIComponent(d.export_name)}`,
           target: "_self",
         }),
         Plot.ruleX([0]),
@@ -458,7 +458,7 @@ nonAdopters.length === 0
       columns: ["project_id"],
       header: { project_id: "Project" },
       format: {
-        project_id: (d) => html`<a href="/project-detail?project=${encodeURIComponent(d)}">${d}</a>`,
+        project_id: (d) => html`<a href="./project-detail?project=${encodeURIComponent(d)}">${d}</a>`,
       },
     })
 ```
