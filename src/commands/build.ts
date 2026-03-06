@@ -143,16 +143,9 @@ interface AllRows {
   function_arg_usages: FunctionArgUsageRow[];
 }
 
-// ─── CLI options ─────────────────────────────────────────────────────────────
-
-export interface BuildOptions {
-  rebuild?: boolean;
-  verbose?: boolean;
-}
-
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
-export async function runBuild(opts: BuildOptions = {}): Promise<void> {
+export async function runBuild(): Promise<void> {
   // 1. Discover all scan files under ~/.usegraph/
   const scanFiles = discoverScanFiles(STORE_ROOT);
 
@@ -172,9 +165,6 @@ export async function runBuild(opts: BuildOptions = {}): Promise<void> {
       scans.push(JSON.parse(raw) as ScanResult);
     } catch {
       parseErrors++;
-      if (opts.verbose) {
-        console.log(chalk.yellow(`  Warning: could not read ${file}`));
-      }
     }
   }
 
@@ -195,7 +185,7 @@ export async function runBuild(opts: BuildOptions = {}): Promise<void> {
   const rows = buildAllRows(scans, latestIds);
 
   // 6. Write to Parquet via DuckDB
-  await writeParquetFiles(rows, opts);
+  await writeParquetFiles(rows);
 
   // Summary
   const tableNames = Object.keys(rows) as Array<keyof AllRows>;
@@ -436,7 +426,7 @@ function stringify(value: string | number | boolean | null | undefined): string 
 
 // ─── DuckDB Parquet writer ────────────────────────────────────────────────────
 
-async function writeParquetFiles(rows: AllRows, opts: BuildOptions): Promise<void> {
+async function writeParquetFiles(rows: AllRows): Promise<void> {
   const db = await new Promise<duckdb.Database>((resolve, reject) => {
     const instance = new duckdb.Database(':memory:', (err) => {
       if (err) reject(err);
@@ -465,17 +455,10 @@ async function writeParquetFiles(rows: AllRows, opts: BuildOptions): Promise<voi
     const outPath = join(BUILT_DIR, `${tableName}.parquet`);
 
     if (tableRows.length === 0) {
-      if (opts.verbose) {
-        console.log(chalk.dim(`  ${tableName}: empty — skipping`));
-      }
       continue;
     }
 
     const tmpPath = join(tmpdir(), `usegraph-${tableName}-${Date.now()}.json`);
-
-    if (opts.verbose) {
-      console.log(chalk.dim(`  ${tableName}: ${tableRows.length} rows → ${outPath}`));
-    }
 
     try {
       writeFileSync(tmpPath, JSON.stringify(tableRows));
