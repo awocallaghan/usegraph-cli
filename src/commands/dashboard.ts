@@ -13,7 +13,7 @@
 import { spawn } from 'child_process';
 import { execSync } from 'child_process';
 import { existsSync, rmSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
@@ -28,12 +28,12 @@ export async function runDashboard(opts: DashboardOptions): Promise<void> {
   //   dist/commands/dashboard.js → ../../ → package root
   const packageRoot = fileURLToPath(new URL('../../', import.meta.url));
   const dashboardDir = join(packageRoot, 'src', 'dashboard');
-  const observableBin = join(packageRoot, 'node_modules', '.bin', 'observable');
+  const observableBin = findObservableBin(packageRoot);
 
   if (!existsSync(observableBin)) {
     console.error(chalk.red('Observable Framework binary not found.'));
-    console.error(chalk.dim(`  Expected at: ${observableBin}`));
-    console.error(chalk.dim('  Try running `pnpm install` in the usegraph-cli package directory.'));
+    console.error(chalk.dim(`  Searched from: ${packageRoot}`));
+    console.error(chalk.dim('  Make sure @observablehq/framework is installed (it should be bundled with @usegraph/cli).'));
     process.exit(1);
   }
 
@@ -82,6 +82,18 @@ export async function runDashboard(opts: DashboardOptions): Promise<void> {
     });
     child.on('error', reject);
   });
+}
+
+function findObservableBin(startDir: string): string {
+  let dir = startDir;
+  for (;;) {
+    const candidate = join(dir, 'node_modules', '.bin', 'observable');
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) break; // reached filesystem root
+    dir = parent;
+  }
+  return join(startDir, 'node_modules', '.bin', 'observable'); // for error message
 }
 
 function openBrowser(url: string): void {
