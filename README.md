@@ -39,10 +39,10 @@ usegraph solves this by scanning the AST of every project, recording precise usa
 
 ```bash
 # Install globally
-npm install -g usegraph-cli
+npm install -g @usegraph/cli
 
 # Or use via npx
-npx usegraph-cli scan
+npx @usegraph/cli scan
 ```
 
 ## Quick Start
