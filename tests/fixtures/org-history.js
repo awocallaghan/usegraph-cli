@@ -2105,6 +2105,5 @@ export const ORG_HISTORY = {
 
 /**
  * The total number of commits in the most detailed project (web-app).
- * Use as the `--history` flag value to ensure all commits are scanned.
  */
 export const MAX_HISTORY_DEPTH = webAppHistory.commits.length;
