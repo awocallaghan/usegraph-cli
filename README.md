@@ -1,6 +1,9 @@
 # usegraph-cli
 
 [![CI](https://github.com/awocallaghan/usegraph-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/awocallaghan/usegraph-cli/actions/workflows/ci.yml)
+[![Demo Dashboard](https://github.com/awocallaghan/usegraph-cli/actions/workflows/deploy-demo.yml/badge.svg)](https://awocallaghan.github.io/usegraph-cli/)
+
+**[→ View the live demo dashboard](https://awocallaghan.github.io/usegraph-cli/)**
 
 A CLI tool for analysing how npm packages are used across your projects and organisation.
 Track React component props, function call arguments, import patterns, and more.
