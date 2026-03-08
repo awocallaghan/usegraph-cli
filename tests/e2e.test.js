@@ -751,3 +751,104 @@ test('monorepo packages are treated as separate projects', async () => {
     `Expected monorepo api package (${apiSlug}) in project list: ${JSON.stringify(projectIds)}`,
   );
 });
+
+// ─── CI template usage e2e tests ──────────────────────────────────────────────
+
+test('ci_template_usages.parquet is produced by build', async () => {
+  const { existsSync } = await import('node:fs');
+  const { getBuiltDir } = await import('../dist/parquet-query.js');
+  const ciPath = join(getBuiltDir(), 'ci_template_usages.parquet');
+  assert.ok(existsSync(ciPath), `Expected ci_template_usages.parquet to exist at ${ciPath}`);
+});
+
+test('list_ci_templates returns rows including actions/checkout', async () => {
+  const rows = await callTool('list_ci_templates', {});
+  assert.ok(rows.length >= 1, `Expected at least 1 CI template row, got ${rows.length}`);
+  const sources = rows.map((r) => r.source);
+  assert.ok(
+    sources.includes('actions/checkout'),
+    `Expected actions/checkout in CI templates: ${JSON.stringify(sources)}`,
+  );
+});
+
+test('list_ci_templates: provider filter returns only github rows', async () => {
+  const rows = await callTool('list_ci_templates', { provider: 'github' });
+  assert.ok(rows.length >= 1, 'Expected at least 1 github CI template');
+  for (const row of rows) {
+    assert.equal(row.provider, 'github', `Expected all rows to be github, got: ${row.provider}`);
+  }
+});
+
+test('query_ci_template_usage: actions/checkout returns project rows', async () => {
+  const rows = await callTool('query_ci_template_usage', { source: 'actions/checkout' });
+  assert.ok(rows.length >= 1, `Expected at least 1 usage row for actions/checkout, got ${rows.length}`);
+
+  // Each row has required fields
+  for (const row of rows) {
+    assert.ok(row.project_id, 'Row should have project_id');
+    assert.equal(row.provider, 'github', 'actions/checkout should be from github provider');
+    assert.ok(row.file_path, 'Row should have file_path');
+    assert.ok(row.line > 0, 'Row should have a positive line number');
+  }
+});
+
+test('query_ci_template_usage: version v4 is seen for actions/checkout', async () => {
+  const rows = await callTool('query_ci_template_usage', { source: 'actions/checkout' });
+  const versions = rows.map((r) => r.version);
+  assert.ok(
+    versions.includes('v4'),
+    `Expected version v4 for actions/checkout, got: ${JSON.stringify(versions)}`,
+  );
+});
+
+test('query_ci_template_adoption_trend: returns monthly data with period + adopting_projects fields', async () => {
+  const rows = await callTool('query_ci_template_adoption_trend', {
+    source: 'actions/checkout',
+    period_months: 3,
+  });
+  assert.ok(rows.length >= 1, `Expected at least 1 trend row, got ${rows.length}`);
+  for (const row of rows) {
+    assert.ok(typeof row.period === 'string', `period should be a string, got ${typeof row.period}`);
+    assert.ok(typeof row.adopting_projects === 'number', `adopting_projects should be a number, got ${typeof row.adopting_projects}`);
+    assert.ok(row.adopting_projects >= 0, 'adopting_projects should be non-negative');
+  }
+});
+
+test('query_ci_template_inputs: actions/setup-node node-version input is present', async () => {
+  const rows = await callTool('query_ci_template_inputs', {
+    source: 'actions/setup-node',
+    input_name: 'node-version',
+  });
+  assert.ok(rows.length >= 1, `Expected at least 1 input row for actions/setup-node node-version, got ${rows.length}`);
+  assert.ok(
+    rows.some((r) => r.input_name === 'node-version'),
+    `Expected node-version in inputs: ${JSON.stringify(rows)}`,
+  );
+});
+
+test('ci_overview.json data loader outputs valid JSON with expected shape', () => {
+  const loaderPath = resolve(__dirname, '..', 'src', 'dashboard', 'pages', 'data', 'ci_overview.json.js');
+  const result = spawnSync(process.execPath, [loaderPath], {
+    env: { ...process.env, USEGRAPH_HOME },
+    encoding: 'utf-8',
+    timeout: 30_000,
+  });
+
+  assert.equal(
+    result.status,
+    0,
+    `CI data loader exited with code ${result.status}.\nstderr: ${result.stderr}`,
+  );
+
+  let parsed;
+  assert.doesNotThrow(
+    () => { parsed = JSON.parse(result.stdout); },
+    `CI data loader stdout is not valid JSON.\nstdout: ${result.stdout.slice(0, 300)}`,
+  );
+
+  assert.ok(typeof parsed.totalUsages === 'number', 'totalUsages should be a number');
+  assert.ok(typeof parsed.projectCount === 'number', 'projectCount should be a number');
+  assert.ok(Array.isArray(parsed.providerCounts), 'providerCounts should be an array');
+  assert.ok(Array.isArray(parsed.topTemplates), 'topTemplates should be an array');
+  assert.ok(parsed.totalUsages > 0, 'Expected totalUsages > 0 (CI files present in fixtures)');
+});
