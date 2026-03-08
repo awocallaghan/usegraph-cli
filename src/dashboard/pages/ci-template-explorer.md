@@ -121,11 +121,12 @@ const [projectRows, versionRows, inputRows] = hasSource
 
 ```js
 function buildFileUrl(projectId, filePath, line) {
+  if (!projectId || !filePath) return null;
   const ghMatch = projectId.match(/^github\.com\/([^/]+\/[^/]+)(\/.*)?$/);
   if (!ghMatch) return null;
   const ownerRepo = ghMatch[1];
   const subPath = ghMatch[2] ? ghMatch[2].slice(1) : null;
-  const cleanFile = (filePath ?? "").replace(/^\//, "");
+  const cleanFile = filePath.replace(/^\//, "");
   const fullPath = subPath ? `${subPath}/${cleanFile}` : cleanFile;
   return `https://github.com/${ownerRepo}/blob/HEAD/${fullPath}${line != null ? `#L${line}` : ""}`;
 }
@@ -203,26 +204,24 @@ if (!hasSource) {
 } else if (projectRows.length === 0) {
   display(html`<p style="color:var(--theme-foreground-muted)">No usage sites found.</p>`);
 } else {
-  display(Inputs.table(projectRows, {
-    columns: ["project_id", "version", "file_path", "line"],
-    header: {
-      project_id: "Project",
-      version: "Version",
-      file_path: "File",
-      line: "Line",
-    },
-    format: {
-      project_id: v => html`<a href="./project-detail?project=${encodeURIComponent(v)}">${v}</a>`,
-      file_path: (v, d) => {
-        const url = buildFileUrl(d.project_id, v, d.line);
-        return url ? html`<a href="${url}" target="_blank" rel="noopener">${v}</a>` : v;
-      },
-      line: (v, d) => {
-        const url = buildFileUrl(d.project_id, d.file_path, v);
-        return url ? html`<a href="${url}" target="_blank" rel="noopener">${v}</a>` : v;
-      },
-      version: v => v ?? html`<em style="color:var(--theme-foreground-muted)">unspecified</em>`,
-    },
-  }));
+  const thStyle = "text-align:left;padding:0.5rem 0.75rem;border-bottom:2px solid var(--theme-foreground-faintest);white-space:nowrap";
+  const tdStyle = "padding:0.4rem 0.75rem;border-bottom:1px solid var(--theme-foreground-faintest);vertical-align:top";
+  display(html`<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:0.875rem">
+    <thead><tr>
+      <th style="${thStyle}">Project</th>
+      <th style="${thStyle}">Version</th>
+      <th style="${thStyle}">File</th>
+      <th style="${thStyle}">Line</th>
+    </tr></thead>
+    <tbody>${projectRows.map(d => {
+      const url = buildFileUrl(d.project_id, d.file_path, d.line);
+      return html`<tr>
+        <td style="${tdStyle}"><a href="./project-detail?project=${encodeURIComponent(d.project_id)}">${d.project_id}</a></td>
+        <td style="${tdStyle}">${d.version ?? html`<em style="color:var(--theme-foreground-muted)">unspecified</em>`}</td>
+        <td style="${tdStyle}">${url ? html`<a href="${url}" target="_blank" rel="noopener">${d.file_path}</a>` : d.file_path}</td>
+        <td style="${tdStyle}">${url ? html`<a href="${url}" target="_blank" rel="noopener">${d.line}</a>` : d.line}</td>
+      </tr>`;
+    })}</tbody>
+  </table></div>`);
 }
 ```
