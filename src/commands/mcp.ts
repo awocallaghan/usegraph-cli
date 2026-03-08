@@ -71,30 +71,44 @@ async function toolListProjects(args: {
   framework?: string;
   build_tool?: string;
   stale_after_days?: number;
+  language?: 'javascript' | 'python';
 }): Promise<unknown> {
   const p = requireParquet('project_snapshots');
   const frameworkFilter = args.framework
-    ? `AND framework = '${sqlStr(args.framework)}'`
+    ? `AND (framework = '${sqlStr(args.framework)}' OR python_framework = '${sqlStr(args.framework)}')`
     : '';
   const buildToolFilter = args.build_tool
     ? `AND build_tool = '${sqlStr(args.build_tool)}'`
     : '';
   const staleDays = typeof args.stale_after_days === 'number' ? args.stale_after_days : 7;
+  const languageFilter = args.language === 'python'
+    ? `AND (python_package_manager IS NOT NULL OR python_framework IS NOT NULL)`
+    : args.language === 'javascript'
+    ? `AND (python_package_manager IS NULL AND python_framework IS NULL)`
+    : '';
   return queryParquet(`
     SELECT
       project_id,
       repo_url,
-      scanned_at::VARCHAR           AS scanned_at,
-      framework,
+      scanned_at::VARCHAR                                        AS scanned_at,
+      COALESCE(framework, python_framework)                      AS framework,
       build_tool,
       test_framework,
       typescript,
-      package_manager,
+      COALESCE(package_manager, python_package_manager)         AS package_manager,
+      python_version,
+      CASE
+        WHEN (python_package_manager IS NOT NULL OR python_framework IS NOT NULL)
+             AND (framework IS NOT NULL OR package_manager IS NOT NULL) THEN 'both'
+        WHEN python_package_manager IS NOT NULL OR python_framework IS NOT NULL THEN 'python'
+        ELSE 'javascript'
+      END AS language,
       (scanned_at::TIMESTAMP < current_timestamp - INTERVAL ${staleDays} DAY) AS is_stale
     FROM read_parquet('${sqlStr(p)}')
     WHERE is_latest = true
       ${frameworkFilter}
       ${buildToolFilter}
+      ${languageFilter}
     ORDER BY project_id
     LIMIT 100
   `);
@@ -104,6 +118,7 @@ async function toolListPackages(args: {
   scope?: string;
   dep_type?: string;
   internal_only?: boolean;
+  language?: string;
 }): Promise<unknown> {
   const p = requireParquet('dependencies');
   const scopeFilter = args.scope
@@ -114,6 +129,9 @@ async function toolListPackages(args: {
     : '';
   const internalFilter =
     args.internal_only === true ? `AND is_internal = true` : '';
+  const langFilter = args.language
+    ? `AND language = '${sqlStr(args.language)}'`
+    : '';
   return queryParquet(`
     SELECT
       package_name,
@@ -124,6 +142,7 @@ async function toolListPackages(args: {
       ${scopeFilter}
       ${depTypeFilter}
       ${internalFilter}
+      ${langFilter}
     GROUP BY package_name
     ORDER BY project_count DESC
     LIMIT 100
@@ -157,6 +176,7 @@ async function toolQueryDependencyVersions(args: {
   package_name: string;
   dep_type?: string;
   include_prerelease?: boolean;
+  language?: string;
 }): Promise<unknown> {
   const p = requireParquet('dependencies');
   const nameFilter = `AND package_name = '${sqlStr(args.package_name)}'`;
@@ -165,6 +185,9 @@ async function toolQueryDependencyVersions(args: {
     : '';
   const prereleaseFilter =
     args.include_prerelease === true ? '' : `AND version_is_prerelease = false`;
+  const langFilter = args.language
+    ? `AND language = '${sqlStr(args.language)}'`
+    : '';
   return queryParquet(`
     SELECT
       version_resolved,
@@ -179,6 +202,7 @@ async function toolQueryDependencyVersions(args: {
       ${nameFilter}
       ${depTypeFilter}
       ${prereleaseFilter}
+      ${langFilter}
     GROUP BY version_resolved, version_major, version_minor, version_patch, version_prerelease
     ORDER BY version_major DESC, version_minor DESC, version_patch DESC
     LIMIT 100
@@ -750,11 +774,12 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'list_projects',
-      description: 'List projects with their latest scan metadata, optionally filtered by framework or build tool.',
+      description: 'List projects with their latest scan metadata, optionally filtered by framework, build tool, or language.',
       schema: z.object({
-        framework: z.string().optional().describe('Filter to projects using this framework (e.g. "react", "next")'),
+        framework: z.string().optional().describe('Filter to projects using this framework (e.g. "react", "next", "fastapi", "flask")'),
         build_tool: z.string().optional().describe('Filter to projects using this build tool (e.g. "vite", "webpack")'),
         stale_after_days: z.number().int().min(1).optional().describe('Flag projects not scanned within this many days'),
+        language: z.enum(['javascript', 'python']).optional().describe('Filter to projects of a specific language ecosystem'),
       }),
     },
     async (input) => wrap(await toolListProjects(input as Parameters<typeof toolListProjects>[0])),
@@ -763,11 +788,12 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'list_packages',
-      description: 'List npm packages detected across all projects, ranked by adoption count. Filter by scope, dependency type, or internal-only.',
+      description: 'List packages (npm or Python) detected across all projects, ranked by adoption count. Filter by scope, dependency type, internal-only, or language.',
       schema: z.object({
         scope: z.string().optional().describe('npm scope prefix, e.g. "@acme" to filter to @acme/* packages'),
         dep_type: z.string().optional().describe('Dependency section: "dependencies", "devDependencies", "peerDependencies", or "optionalDependencies"'),
         internal_only: z.boolean().optional().describe('If true, return only packages flagged as internal'),
+        language: z.string().optional().describe('Filter to a specific language ecosystem: "javascript" or "python"'),
       }),
     },
     async (input) => wrap(await toolListPackages(input as Parameters<typeof toolListPackages>[0])),
@@ -789,11 +815,12 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_dependency_versions',
-      description: 'Show the distribution of resolved versions for a specific npm package across all projects.',
+      description: 'Show the distribution of resolved versions for a specific npm or Python package across all projects.',
       schema: z.object({
-        package_name: z.string().describe('Exact npm package name, e.g. "react"'),
+        package_name: z.string().describe('Exact package name, e.g. "react" or "fastapi"'),
         dep_type: z.string().optional().describe('Filter by dependency section (optional)'),
         include_prerelease: z.boolean().optional().describe('Include prerelease versions (default: false)'),
+        language: z.string().optional().describe('Filter to a specific language ecosystem: "javascript" or "python"'),
       }),
     },
     async (input) => wrap(await toolQueryDependencyVersions(input as Parameters<typeof toolQueryDependencyVersions>[0])),
@@ -814,9 +841,9 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_tooling_distribution',
-      description: 'Show the distribution of a tooling category (framework, build tool, etc.) across all projects.',
+      description: 'Show the distribution of a tooling category across all projects. JS categories: framework, build_tool, package_manager, test_framework, linter, formatter, css_approach, typescript. Python categories: python_framework, python_package_manager, python_version.',
       schema: z.object({
-        category: z.enum(Array.from(TOOLING_CATEGORY_ALLOWLIST) as [string, ...string[]]).describe('Tooling category column name'),
+        category: z.enum(Array.from(TOOLING_CATEGORY_ALLOWLIST) as [string, ...string[]]).describe('Tooling category column name, e.g. "framework", "python_framework", "python_package_manager"'),
       }),
     },
     async (input) => wrap(await toolQueryToolingDistribution(input as Parameters<typeof toolQueryToolingDistribution>[0])),

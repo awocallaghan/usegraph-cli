@@ -42,30 +42,58 @@ const snapshotSchema = await queryParquet(
 const snapshotHasCodeAt = snapshotSchema.some(c => c.column_name === 'code_at');
 const codeAtExpr = snapshotHasCodeAt ? 'code_at' : 'NULL::VARCHAR AS code_at';
 
-const [projects, frameworkCounts, buildToolCounts, pmCounts] = await Promise.all([
+const hasPythonCols = snapshotSchema.some(c => c.column_name === 'python_framework');
+const pyFramework = hasPythonCols ? 'python_framework' : 'NULL::VARCHAR AS python_framework';
+const pyPkgMgr    = hasPythonCols ? 'python_package_manager' : 'NULL::VARCHAR AS python_package_manager';
+
+const snap = p('project_snapshots.parquet');
+
+const [projects, frameworkCounts, buildToolCounts, pmCounts, languageCounts] = await Promise.all([
   queryParquet(
-    `SELECT project_id, scanned_at, ${codeAtExpr}, framework, build_tool, package_manager
-     FROM ${p('project_snapshots.parquet')}
+    `SELECT project_id, scanned_at, ${codeAtExpr},
+       CASE
+         WHEN (python_package_manager IS NOT NULL OR python_framework IS NOT NULL)
+              AND (framework IS NOT NULL OR package_manager IS NOT NULL) THEN 'both'
+         WHEN python_package_manager IS NOT NULL OR python_framework IS NOT NULL THEN 'python'
+         ELSE 'javascript'
+       END AS language,
+       COALESCE(framework, python_framework)             AS framework,
+       build_tool,
+       COALESCE(package_manager, python_package_manager) AS package_manager
+     FROM (SELECT *, ${pyFramework}, ${pyPkgMgr} FROM ${snap}) _s
      WHERE is_latest = true
      ORDER BY scanned_at DESC`,
   ),
   queryParquet(
-    `SELECT framework AS name, COUNT(*) AS count
-     FROM ${p('project_snapshots.parquet')}
-     WHERE is_latest = true AND framework IS NOT NULL
-     GROUP BY framework ORDER BY count DESC`,
+    `SELECT name, COUNT(*) AS count FROM (
+       SELECT framework AS name FROM ${snap} WHERE is_latest = true AND framework IS NOT NULL
+       ${hasPythonCols ? `UNION ALL SELECT python_framework AS name FROM ${snap} WHERE is_latest = true AND python_framework IS NOT NULL` : ''}
+     ) _f GROUP BY name ORDER BY count DESC`,
   ),
   queryParquet(
     `SELECT build_tool AS name, COUNT(*) AS count
-     FROM ${p('project_snapshots.parquet')}
+     FROM ${snap}
      WHERE is_latest = true AND build_tool IS NOT NULL
      GROUP BY build_tool ORDER BY count DESC`,
   ),
   queryParquet(
-    `SELECT package_manager AS name, COUNT(*) AS count
-     FROM ${p('project_snapshots.parquet')}
-     WHERE is_latest = true AND package_manager IS NOT NULL
-     GROUP BY package_manager ORDER BY count DESC`,
+    `SELECT name, COUNT(*) AS count FROM (
+       SELECT package_manager AS name FROM ${snap} WHERE is_latest = true AND package_manager IS NOT NULL
+       ${hasPythonCols ? `UNION ALL SELECT python_package_manager AS name FROM ${snap} WHERE is_latest = true AND python_package_manager IS NOT NULL` : ''}
+     ) _pm GROUP BY name ORDER BY count DESC`,
+  ),
+  queryParquet(
+    `SELECT
+       CASE
+         WHEN (python_package_manager IS NOT NULL OR python_framework IS NOT NULL)
+              AND (framework IS NOT NULL OR package_manager IS NOT NULL) THEN 'both'
+         WHEN python_package_manager IS NOT NULL OR python_framework IS NOT NULL THEN 'python'
+         ELSE 'javascript'
+       END AS language,
+       COUNT(*) AS count
+     FROM (SELECT *, ${pyFramework}, ${pyPkgMgr} FROM ${snap}) _s
+     WHERE is_latest = true
+     GROUP BY language ORDER BY count DESC`,
   ),
 ]);
 
@@ -95,5 +123,6 @@ process.stdout.write(
     frameworkCounts,
     buildToolCounts,
     packageManagerCounts: pmCounts,
+    languageCounts,
   }),
 );

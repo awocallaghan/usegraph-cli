@@ -48,13 +48,14 @@ const [allSnapshots, deps, componentUsages, functionUsages, scanHistory] = await
   db.query(
     `SELECT project_id, scanned_at, code_at, is_latest, framework, framework_version, package_manager,
             build_tool, test_framework, linter, formatter, css_approach,
-            typescript, typescript_version, node_version, branch, commit_sha
+            typescript, typescript_version, node_version, branch, commit_sha,
+            python_package_manager, python_version, python_framework
      FROM project_snapshots WHERE project_id = '${safeId}' ORDER BY scanned_at DESC`
   ).then(r => Array.from(r)),
 
   db.query(
     `SELECT package_name, version_resolved, version_range, dep_type,
-            version_is_prerelease, is_internal
+            version_is_prerelease, is_internal, language
      FROM dependencies WHERE project_id = '${safeId}' AND is_latest = true
      ORDER BY dep_type, package_name`
   ).then(r => Array.from(r)),
@@ -102,9 +103,12 @@ if (!latestSnapshot) {
   display(html`<p style="color:var(--theme-foreground-muted)">No snapshot data found for <strong>${selectedProject}</strong>.</p>`);
 } else {
   const tooling = [
-    ["Framework",        latestSnapshot.framework       ? `${latestSnapshot.framework} ${latestSnapshot.framework_version ?? ""}`.trim() : null],
-    ["Package manager",  latestSnapshot.package_manager],
+    ["Framework",        latestSnapshot.framework
+                           ? `${latestSnapshot.framework} ${latestSnapshot.framework_version ?? ""}`.trim()
+                           : latestSnapshot.python_framework ?? null],
+    ["Package manager",  latestSnapshot.package_manager ?? latestSnapshot.python_package_manager],
     ["Build tool",       latestSnapshot.build_tool],
+    ["Python version",   latestSnapshot.python_version],
     ["Test framework",   latestSnapshot.test_framework],
     ["Linter",           latestSnapshot.linter],
     ["Formatter",        latestSnapshot.formatter],
@@ -137,6 +141,10 @@ if (!latestSnapshot) {
 ## Dependencies
 
 ```js
+const depLangFilter = view(Inputs.select(["All", "javascript", "python"], { label: "Language" }))
+```
+
+```js
 const depTypeFilter = view(Inputs.select(
   ["All", "dependencies", "devDependencies", "peerDependencies", "optionalDependencies"],
   { label: "Dep type" }
@@ -157,6 +165,7 @@ const depInternalOnly = view(Inputs.toggle({ label: "Internal only" }))
 
 ```js
 const filteredDeps = deps.filter(d => {
+  if (depLangFilter !== "All" && (d.language ?? "javascript") !== depLangFilter) return false;
   if (depTypeFilter !== "All" && d.dep_type !== depTypeFilter) return false;
   if (depPkgSearch.trim() && !d.package_name.includes(depPkgSearch.trim())) return false;
   if (depPrereleaseOnly && !d.version_is_prerelease) return false;

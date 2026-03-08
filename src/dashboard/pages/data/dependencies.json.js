@@ -34,6 +34,10 @@ function p(filename) {
 
 const deps = p('dependencies.parquet');
 
+const depsSchema = await queryParquet(`DESCRIBE SELECT * FROM ${deps}`);
+const depsHasLang = depsSchema.some(c => c.column_name === 'language');
+const langExpr = depsHasLang ? 'language' : "'javascript' AS language";
+
 const [topPackagesRaw, allDeps, prereleaseExposure] = await Promise.all([
   // Top 50 packages by project count
   queryParquet(
@@ -56,7 +60,8 @@ const [topPackagesRaw, allDeps, prereleaseExposure] = await Promise.all([
   queryParquet(
     `SELECT project_id, package_name, version_range, version_resolved,
             version_major, version_minor, version_patch,
-            version_prerelease, version_is_prerelease, dep_type, is_internal
+            version_prerelease, version_is_prerelease, dep_type, is_internal,
+            ${langExpr}
      FROM ${deps}
      WHERE is_latest = true
      ORDER BY package_name, project_id`,

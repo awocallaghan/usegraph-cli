@@ -100,10 +100,21 @@ ciOverview.totalUsages > 0
 ## Projects
 
 ```js
-Inputs.table(overview.projects, {
-  columns: ["project_id", "framework", "build_tool", "package_manager", "code_at", "scanned_at"],
+const langFilter = view(Inputs.select(["All", "javascript", "python", "both"], { label: "Language" }))
+```
+
+```js
+const filteredProjects = langFilter === "All"
+  ? overview.projects
+  : overview.projects.filter(p => p.language === langFilter);
+```
+
+```js
+Inputs.table(filteredProjects, {
+  columns: ["project_id", "language", "framework", "build_tool", "package_manager", "code_at", "scanned_at"],
   header: {
     project_id: "Project",
+    language: "Language",
     framework: "Framework",
     build_tool: "Build tool",
     package_manager: "Pkg manager",
