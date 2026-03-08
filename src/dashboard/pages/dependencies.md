@@ -25,6 +25,10 @@ html`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px
 ```
 
 ```js
+const langFilter = view(Inputs.select(["All", "javascript", "python"], { label: "Language" }))
+```
+
+```js
 const depTypeFilter = view(Inputs.select(
   ["All", "dependencies", "devDependencies", "peerDependencies", "optionalDependencies"],
   { label: "Dep type" }
@@ -41,6 +45,7 @@ const prereleaseOnly = view(Inputs.toggle({ label: "Prerelease only" }))
 
 ```js
 const filteredDeps = deps.allDeps.filter(d => {
+  if (langFilter !== "All" && (d.language ?? "javascript") !== langFilter) return false;
   if (depTypeFilter !== "All" && d.dep_type !== depTypeFilter) return false;
   if (pkgSearch.trim() !== "" && !d.package_name.includes(pkgSearch.trim())) return false;
   if (prereleaseOnly && !d.version_is_prerelease) return false;

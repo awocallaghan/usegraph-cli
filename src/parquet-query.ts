@@ -62,6 +62,9 @@ export const TOOLING_CATEGORY_ALLOWLIST = new Set([
   'css_approach',
   'framework',
   'typescript',
+  'python_package_manager',
+  'python_framework',
+  'python_version',
 ]);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
