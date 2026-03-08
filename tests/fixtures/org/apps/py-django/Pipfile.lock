@@ -1,0 +1,78 @@
+{
+    "_meta": {
+        "hash": {
+            "sha256": "abc123def456abc123def456abc123def456abc123def456abc123def456abc123"
+        },
+        "pipfile-spec": 6,
+        "requires": {
+            "python_version": "3.10"
+        },
+        "sources": [
+            {
+                "name": "pypi",
+                "url": "https://pypi.org/simple",
+                "verify_ssl": true
+            }
+        ]
+    },
+    "default": {
+        "django": {
+            "hashes": [],
+            "version": "==4.2.15"
+        },
+        "celery": {
+            "hashes": [],
+            "version": "==5.3.6"
+        },
+        "psycopg2-binary": {
+            "hashes": [],
+            "version": "==2.9.9"
+        },
+        "amqp": {
+            "hashes": [],
+            "version": "==5.2.0"
+        },
+        "billiard": {
+            "hashes": [],
+            "version": "==4.2.0"
+        },
+        "kombu": {
+            "hashes": [],
+            "version": "==5.3.5"
+        },
+        "redis": {
+            "hashes": [],
+            "version": "==5.0.8"
+        },
+        "sqlparse": {
+            "hashes": [],
+            "version": "==0.5.1"
+        }
+    },
+    "develop": {
+        "pytest": {
+            "hashes": [],
+            "version": "==7.4.4"
+        },
+        "pytest-django": {
+            "hashes": [],
+            "version": "==4.7.0"
+        },
+        "black": {
+            "hashes": [],
+            "version": "==24.8.0"
+        },
+        "flake8": {
+            "hashes": [],
+            "version": "==7.1.1"
+        },
+        "mypy": {
+            "hashes": [],
+            "version": "==1.11.0"
+        },
+        "django-stubs": {
+            "hashes": [],
+            "version": "==4.2.7"
+        }
+    }
+}
