@@ -1,0 +1,19 @@
+[[source]]
+url = "https://pypi.org/simple"
+name = "pypi"
+
+[packages]
+django = ">=4.2,<5"
+celery = {version = ">=5.3", extras = ["redis"]}
+psycopg2-binary = ">=2.9"
+
+[dev-packages]
+pytest = ">=7.4"
+pytest-django = ">=4.7"
+black = ">=24.0"
+flake8 = ">=7.0"
+mypy = ">=1.8"
+django-stubs = ">=4.2"
+
+[requires]
+python_version = "3.10"

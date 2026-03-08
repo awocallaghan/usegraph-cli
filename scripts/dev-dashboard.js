@@ -39,6 +39,14 @@ const SOURCE_PROJECTS = [
   join(FIXTURES_ROOT, 'packages', 'utils'),
 ];
 
+const PYTHON_PROJECTS = [
+  join(FIXTURES_ROOT, 'apps', 'py-web'),
+  join(FIXTURES_ROOT, 'apps', 'py-data'),
+  join(FIXTURES_ROOT, 'apps', 'py-django'),
+  join(FIXTURES_ROOT, 'apps', 'py-worker'),
+  join(FIXTURES_ROOT, 'apps', 'py-service'),
+];
+
 const DEV_STORE   = join(REPO_ROOT, '.dev-usegraph');
 const DEV_FIXTURES = join(DEV_STORE, 'fixtures');
 const DIST_CLI    = join(REPO_ROOT, 'dist', 'index.js');
@@ -122,6 +130,15 @@ if (!BUILD_ONLY) {
       '--since', '6m',
       '--interval', '1m',
     );
+  }
+}
+
+// ── scan Python fixture projects (no git history needed) ──────────────────────
+
+if (!BUILD_ONLY) {
+  console.log('\n── Scanning Python fixture projects ──────────────────────────────');
+  for (const pyPath of PYTHON_PROJECTS) {
+    run(`scan python/${basename(pyPath)}`, DIST_CLI, 'scan', pyPath);
   }
 }
 

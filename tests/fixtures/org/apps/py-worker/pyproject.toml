@@ -1,0 +1,27 @@
+[project]
+name = "py-worker"
+version = "0.3.0"
+requires-python = ">=3.12"
+dependencies = [
+    "celery[redis]>=5.3",
+    "kombu>=5.3",
+    "pydantic>=2.8",
+    "structlog>=24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "pyright>=1.1",
+]
+
+[tool.pdm]
+distribution = false
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.format]
+quote-style = "double"
