@@ -6,6 +6,7 @@ title: Overview
 
 ```js
 const overview = await FileAttachment("data/overview.json").json();
+const ciOverview = await FileAttachment("data/ci_overview.json").json();
 ```
 
 ```js
@@ -15,6 +16,7 @@ html`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px
     ["Projects", overview.projects.length],
     ["Component Usages", overview.totalComponentUsages],
     ["Function Calls", overview.totalFunctionUsages],
+    ["CI Template Usages", ciOverview.totalUsages],
   ].map(([label, value]) =>
     html`<div style="background:var(--theme-background-alt);border:1px solid var(--theme-foreground-faintest);border-radius:8px;padding:1.25rem">
       <div style="font-size:2rem;font-weight:700;color:var(--theme-foreground-focus)">${value.toLocaleString()}</div>
@@ -85,6 +87,14 @@ overview.packageManagerCounts.length > 0
       ],
     })
   : html`<p style="color:var(--theme-foreground-muted)">No package manager data available.</p>`
+```
+
+## CI templates
+
+```js
+ciOverview.totalUsages > 0
+  ? html`<p>Detected <strong>${ciOverview.totalUsages.toLocaleString()}</strong> CI template usages across <strong>${ciOverview.projectCount}</strong> projects. <a href="./ci-overview">View CI overview →</a></p>`
+  : html`<p style="color:var(--theme-foreground-muted)">No CI template data yet. Run <code>usegraph scan</code> on projects with CI files, then <code>usegraph build</code>.</p>`
 ```
 
 ## Projects

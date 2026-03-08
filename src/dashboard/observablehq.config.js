@@ -20,5 +20,7 @@ export default {
     { name: "Project Detail", path: "/project-detail" },
     { name: "Component Explorer", path: "/component-explorer" },
     { name: "Function Explorer", path: "/function-explorer" },
+    { name: "CI Overview", path: "/ci-overview" },
+    { name: "CI Template Explorer", path: "/ci-template-explorer" },
   ],
 };
