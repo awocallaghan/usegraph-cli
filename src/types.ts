@@ -155,6 +155,10 @@ export interface ScanResult {
   codeAt: string | null;
   /** When true, this scan was produced by walking git history (not the working tree) */
   isHistoricalScan?: boolean;
+  /** CI template usages found in this project's CI configuration files */
+  ciTemplateUsages?: CiTemplateUsage[];
+  /** Summary of CI scanning results */
+  ciScanSummary?: CiScanSummary;
 }
 
 // --------------------------------------------------------------------------
@@ -225,4 +229,47 @@ export interface UsegraphConfig {
   include: string[];
   /** Glob patterns for files to exclude */
   exclude: string[];
+}
+
+// --------------------------------------------------------------------------
+// CI template usage types
+// --------------------------------------------------------------------------
+
+/** A single input/variable passed to a CI template */
+export interface CiTemplateInput {
+  name: string;
+  /** Null for dynamic values (${{ ... }} expressions or $VAR references) */
+  value: string | null;
+  isDynamic: boolean;
+}
+
+/** A single usage of a CI template/action/workflow in a CI configuration file */
+export interface CiTemplateUsage {
+  /** Relative path to the CI file (e.g. ".github/workflows/ci.yml") */
+  file: string;
+  /** 1-indexed line number of the usage within the file */
+  line: number;
+  provider: 'github' | 'gitlab';
+  templateType:
+    | 'action'
+    | 'reusable_workflow'
+    | 'gitlab_component'
+    | 'gitlab_template'
+    | 'gitlab_project_include'
+    | 'gitlab_local_include';
+  /** Template identifier, e.g. "actions/checkout" or "org/.github/workflows/deploy.yml" */
+  source: string;
+  /** Version/ref pinned, e.g. "v4", "main", "1.0.0". Null when not specified. */
+  version: string | null;
+  inputs: CiTemplateInput[];
+}
+
+/** Summary of CI scanning results for a project */
+export interface CiScanSummary {
+  totalCiFiles: number;
+  totalTemplateUsages: number;
+  /** Providers detected (e.g. ["github", "gitlab"]) */
+  providers: string[];
+  /** CI files that failed to parse */
+  filesWithErrors: string[];
 }
