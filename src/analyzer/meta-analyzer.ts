@@ -434,6 +434,13 @@ function buildToolingMeta(
     nodeVersion,
     framework,
     frameworkVersion,
+    pythonPackageManager: null,
+    pythonVersion: null,
+    pythonFramework: null,
+    pythonTestFramework: null,
+    pythonLinter: null,
+    pythonFormatter: null,
+    pythonTypeChecker: null,
   };
 }
 
