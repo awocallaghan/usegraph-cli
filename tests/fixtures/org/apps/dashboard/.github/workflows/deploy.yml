@@ -1,0 +1,13 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    uses: org/platform/.github/workflows/deploy-app.yml@main
+    with:
+      environment: production
+      app-name: dashboard
+    secrets: inherit

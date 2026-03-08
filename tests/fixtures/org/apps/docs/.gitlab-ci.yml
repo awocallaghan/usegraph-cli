@@ -1,0 +1,19 @@
+include:
+  - project: 'org/platform'
+    ref: 'v1.2.0'
+    file:
+      - '/ci/test.yml'
+      - '/ci/deploy.yml'
+
+  - component: 'gitlab.example.com/org/ci-components/lint@1.0.0'
+    inputs:
+      node-version: '20'
+      strict: true
+
+  - template: 'Auto-DevOps.gitlab-ci.yml'
+
+  - local: '/.gitlab/security-scan.yml'
+
+stages:
+  - test
+  - deploy
