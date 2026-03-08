@@ -179,6 +179,8 @@ export interface DependencyEntry {
   versionPatch: number | null;
   versionPrerelease: string | null;
   versionIsPrerelease: boolean | null;
+  /** Source language — 'javascript' (default) or 'python' */
+  language?: 'javascript' | 'python';
 }
 
 /** Flat tooling detection result replacing the old ToolingInfo[] array */
@@ -209,6 +211,20 @@ export interface ToolingMeta {
   framework: string | null;
   /** Framework version range from package.json */
   frameworkVersion: string | null;
+  /** Python package manager: "poetry" | "pdm" | "pipenv" | "pip-tools" | "pip" | "hatch" */
+  pythonPackageManager: string | null;
+  /** Python version from .python-version / pyproject.toml */
+  pythonVersion: string | null;
+  /** "django" | "flask" | "fastapi" | "starlette" */
+  pythonFramework: string | null;
+  /** "pytest" | "nose2" */
+  pythonTestFramework: string | null;
+  /** "ruff" | "flake8" | "pylint" */
+  pythonLinter: string | null;
+  /** "black" | "autopep8" | "isort" */
+  pythonFormatter: string | null;
+  /** "mypy" | "pyright" | "pytype" */
+  pythonTypeChecker: string | null;
 }
 
 /** Project metadata: package.json summary + detected tooling */
