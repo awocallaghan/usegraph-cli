@@ -66,6 +66,12 @@ const HISTORY_KEYS = {
 // Work dirs: temp copies initialized with full git history (populated in before())
 const WORK_PROJECTS = [];
 
+// Python fixture projects — scanned directly (no git history needed)
+const PYTHON_FIXTURE_PROJECTS = [
+  join(FIXTURES_ROOT, 'apps/py-web'),
+  join(FIXTURES_ROOT, 'apps/py-data'),
+];
+
 // Monorepo: single work dir, multiple scan targets within it
 let MONOREPO_WORK_DIR = null;
 
@@ -130,7 +136,24 @@ before(async () => {
     }
   }
 
-  // 2. Build Parquet tables
+  // 3. Scan Python fixture projects directly (no git history needed)
+  for (const pyPath of PYTHON_FIXTURE_PROJECTS) {
+    const result = spawnSync(
+      process.execPath,
+      [DIST_CLI, 'scan', pyPath, '--packages', 'fastapi,flask'],
+      {
+        env: process.env,
+        encoding: 'utf-8',
+        timeout: 60_000,
+      },
+    );
+    if (result.status !== 0) {
+      const err = (result.stderr || result.stdout || '').slice(0, 500);
+      throw new Error(`Python scan failed for ${pyPath}:\n${err}`);
+    }
+  }
+
+  // 4. Build Parquet tables
   await runBuild();
 });
 
@@ -145,9 +168,9 @@ after(() => {
 
 // ─── Assertions ───────────────────────────────────────────────────────────────
 
-test('list_projects returns exactly 9 projects', async () => {
+test('list_projects returns exactly 11 projects', async () => {
   const rows = await callTool('list_projects', {});
-  assert.equal(rows.length, 9, `Expected 9 projects, got ${rows.length}: ${JSON.stringify(rows.map(r => r.project_id))}`);
+  assert.equal(rows.length, 11, `Expected 11 projects, got ${rows.length}: ${JSON.stringify(rows.map(r => r.project_id))}`);
 });
 
 test('list_packages includes @acme/ui and @acme/utils', async () => {
@@ -250,12 +273,12 @@ test('query_dependency_versions: react 18.2.0 is present', async () => {
   );
 });
 
-test('get_scan_metadata: project_count is 9', async () => {
+test('get_scan_metadata: project_count is 11', async () => {
   const meta = await callTool('get_scan_metadata', {});
   assert.equal(
     meta.project_count,
-    9,
-    `Expected project_count=9, got ${meta.project_count}`,
+    11,
+    `Expected project_count=11, got ${meta.project_count}`,
   );
 });
 
@@ -324,7 +347,7 @@ test('dashboard data loader outputs valid JSON with correct shape', () => {
   assert.ok(Array.isArray(parsed.packageManagerCounts), 'packageManagerCounts should be an array');
 
   // Data correctness
-  assert.equal(parsed.projects.length, 9, `Expected 9 projects, got ${parsed.projects.length}`);
+  assert.equal(parsed.projects.length, 11, `Expected 11 projects, got ${parsed.projects.length}`);
   assert.ok(parsed.totalComponentUsages > 0, 'totalComponentUsages should be > 0');
   assert.ok(parsed.totalFunctionUsages > 0, 'totalFunctionUsages should be > 0');
 
@@ -851,4 +874,93 @@ test('ci_overview.json data loader outputs valid JSON with expected shape', () =
   assert.ok(Array.isArray(parsed.providerCounts), 'providerCounts should be an array');
   assert.ok(Array.isArray(parsed.topTemplates), 'topTemplates should be an array');
   assert.ok(parsed.totalUsages > 0, 'Expected totalUsages > 0 (CI files present in fixtures)');
+});
+
+// ─── Python fixture e2e tests ─────────────────────────────────────────────────
+
+test('py-web: scan has pythonPackageManager = poetry in project_snapshots', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[0]); // py-web
+  const p = requireParquet('project_snapshots');
+  const rows = await queryParquet(
+    `SELECT python_package_manager, python_framework
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`,
+  );
+
+  assert.ok(rows.length >= 1, `Expected at least 1 snapshot for py-web (slug: ${slug})`);
+  assert.equal(
+    rows[0].python_package_manager,
+    'poetry',
+    `Expected python_package_manager=poetry, got: ${rows[0].python_package_manager}`,
+  );
+  assert.equal(
+    rows[0].python_framework,
+    'fastapi',
+    `Expected python_framework=fastapi, got: ${rows[0].python_framework}`,
+  );
+});
+
+test('py-web: dependencies Parquet contains rows with language = python', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[0]); // py-web
+  const p = requireParquet('dependencies');
+  const rows = await queryParquet(
+    `SELECT package_name, language
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`,
+  );
+
+  assert.ok(rows.length >= 1, `Expected Python dep rows for py-web (slug: ${slug})`);
+  for (const row of rows) {
+    assert.equal(row.language, 'python', `dep ${row.package_name} should have language=python`);
+  }
+  const names = rows.map((r) => r.package_name);
+  assert.ok(names.includes('fastapi'), `Expected fastapi in py-web deps: ${JSON.stringify(names)}`);
+});
+
+test('py-data: scan has pythonPackageManager = pip-tools', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[1]); // py-data
+  const p = requireParquet('project_snapshots');
+  const rows = await queryParquet(
+    `SELECT python_package_manager, python_framework
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`,
+  );
+
+  assert.ok(rows.length >= 1, `Expected at least 1 snapshot for py-data (slug: ${slug})`);
+  assert.equal(
+    rows[0].python_package_manager,
+    'pip-tools',
+    `Expected python_package_manager=pip-tools, got: ${rows[0].python_package_manager}`,
+  );
+  assert.equal(
+    rows[0].python_framework,
+    'flask',
+    `Expected python_framework=flask, got: ${rows[0].python_framework}`,
+  );
+});
+
+test('dependencies Parquet: both javascript and python language values present', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const p = requireParquet('dependencies');
+  const rows = await queryParquet(
+    `SELECT DISTINCT language FROM read_parquet('${p.replace(/'/g, "''")}') WHERE is_latest = true`,
+  );
+  const languages = rows.map((r) => r.language);
+  assert.ok(
+    languages.includes('javascript'),
+    `Expected javascript in language column: ${JSON.stringify(languages)}`,
+  );
+  assert.ok(
+    languages.includes('python'),
+    `Expected python in language column: ${JSON.stringify(languages)}`,
+  );
 });
