@@ -13,6 +13,7 @@ import { spawnSync } from 'child_process';
 import { analyzeFile } from './file-analyzer.js';
 import { analyzeProjectMeta } from './meta-analyzer.js';
 import { parseCiFiles } from './ci-parser.js';
+import { findPythonProjectRoot, detectAndParsePythonProject, mergePythonMeta } from './python-meta-analyzer.js';
 import {
   npmLockfileParser,
   pnpmLockfileParser,
@@ -280,6 +281,13 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
   // Resolve installed versions from the lockfile and enrich the scan result
   const resolvedVersions = detectAndParseLockfile(projectPath);
   enrichWithResolvedVersions(results, meta, resolvedVersions);
+
+  // Python project detection: find Python root + merge deps/tooling into meta
+  const pythonRoot = findPythonProjectRoot(projectPath);
+  if (pythonRoot !== null) {
+    const pythonProject = detectAndParsePythonProject(pythonRoot);
+    mergePythonMeta(meta, pythonProject);
+  }
 
   // Scan CI configuration files (always-on; gracefully absent)
   const ciResult = parseCiFiles(projectPath);
