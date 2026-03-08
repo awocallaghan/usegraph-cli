@@ -66,6 +66,9 @@ interface ProjectSnapshotRow {
   node_version: string | null;
   framework: string | null;
   framework_version: string | null;
+  python_package_manager: string | null;
+  python_version: string | null;
+  python_framework: string | null;
 }
 
 interface DependencyRow {
@@ -83,6 +86,7 @@ interface DependencyRow {
   version_is_prerelease: boolean | null;
   dep_type: string;
   is_internal: boolean;
+  language: string;
 }
 
 interface ComponentUsageRow {
@@ -334,6 +338,9 @@ function buildAllRows(scans: ScanResult[], latestIds: Set<string>): AllRows {
       node_version: tooling?.nodeVersion ?? null,
       framework: tooling?.framework ?? null,
       framework_version: tooling?.frameworkVersion ?? null,
+      python_package_manager: tooling?.pythonPackageManager ?? null,
+      python_version: tooling?.pythonVersion ?? null,
+      python_framework: tooling?.pythonFramework ?? null,
     });
 
     // ── dependencies ───────────────────────────────────────────────────────
@@ -358,6 +365,7 @@ function buildAllRows(scans: ScanResult[], latestIds: Set<string>): AllRows {
           version_is_prerelease: dep.versionIsPrerelease ?? null,
           dep_type: dep.section,
           is_internal,
+          language: (dep as { language?: string }).language ?? 'javascript',
         });
       }
     }
