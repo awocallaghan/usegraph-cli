@@ -31,6 +31,8 @@ export function getParquet(): Record<string, string> {
     component_prop_usages: join(builtDir, 'component_prop_usages.parquet'),
     function_usages: join(builtDir, 'function_usages.parquet'),
     function_arg_usages: join(builtDir, 'function_arg_usages.parquet'),
+    ci_template_usages: join(builtDir, 'ci_template_usages.parquet'),
+    ci_template_inputs: join(builtDir, 'ci_template_inputs.parquet'),
   };
 }
 
@@ -45,6 +47,8 @@ export const PARQUET = getParquet() as {
   component_prop_usages: string;
   function_usages: string;
   function_arg_usages: string;
+  ci_template_usages: string;
+  ci_template_inputs: string;
 };
 
 /** Tooling categories that may appear as a SQL column name */
