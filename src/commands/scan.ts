@@ -160,6 +160,11 @@ function printScanSummary(result: ScanResult, elapsedSec: string): void {
     console.log(`  Code timestamp:     ${result.codeAt}${shortSha}`);
   }
 
+  if (result.ciScanSummary && result.ciScanSummary.totalTemplateUsages > 0) {
+    const ci = result.ciScanSummary;
+    console.log(`  CI template usages: ${ci.totalTemplateUsages} (${ci.providers.join(', ')})`);
+  }
+
   if (Object.keys(summary.byPackage).length > 0) {
     console.log('');
     console.log(chalk.bold('By package:'));

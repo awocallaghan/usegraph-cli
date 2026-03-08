@@ -7,11 +7,12 @@
  * making repeated scans on large codebases significantly faster.
  */
 import fg from 'fast-glob';
-import { existsSync, readFileSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { spawnSync } from 'child_process';
 import { analyzeFile } from './file-analyzer.js';
 import { analyzeProjectMeta } from './meta-analyzer.js';
+import { parseCiFiles } from './ci-parser.js';
 import {
   npmLockfileParser,
   pnpmLockfileParser,
@@ -280,6 +281,10 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
   const resolvedVersions = detectAndParseLockfile(projectPath);
   enrichWithResolvedVersions(results, meta, resolvedVersions);
 
+  // Scan CI configuration files (always-on; gracefully absent)
+  const ciResult = parseCiFiles(projectPath);
+  const ciProviders = [...new Set(ciResult.usages.map((u) => u.provider))];
+
   const commitSha = getCommitSha(projectPath);
   return {
     id: commitSha ?? randomUUID(),
@@ -300,7 +305,31 @@ export async function scanProject(opts: ScanOptions): Promise<ScanResult> {
     meta,
     cacheHits: cache ? cacheHits : undefined,
     codeAt: getCommitTimestamp(projectPath),
+    ...(ciResult.usages.length > 0 || ciResult.errors.length > 0
+      ? {
+          ciTemplateUsages: ciResult.usages,
+          ciScanSummary: {
+            totalCiFiles: countCiFiles(projectPath),
+            totalTemplateUsages: ciResult.usages.length,
+            providers: ciProviders,
+            filesWithErrors: ciResult.errors,
+          },
+        }
+      : {}),
   };
+}
+
+/** Count CI config files present in the project (for summary reporting). */
+function countCiFiles(projectPath: string): number {
+  let count = 0;
+  try {
+    const workflowsDir = join(projectPath, '.github', 'workflows');
+    if (existsSync(workflowsDir)) {
+      count += readdirSync(workflowsDir).filter((f) => f.endsWith('.yml') || f.endsWith('.yaml')).length;
+    }
+  } catch { /* ignore */ }
+  if (existsSync(join(projectPath, '.gitlab-ci.yml'))) count++;
+  return count;
 }
 
 /**
