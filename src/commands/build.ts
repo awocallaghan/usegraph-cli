@@ -134,6 +134,25 @@ interface FunctionArgUsageRow extends FunctionUsageRow {
   source_snippet: string | null;
 }
 
+interface CiTemplateUsageRow {
+  project_id: string;
+  scanned_at: string;
+  code_at: string | null;
+  is_latest: boolean;
+  provider: string;
+  template_type: string;
+  source: string;
+  version: string | null;
+  file_path: string;
+  line: number;
+}
+
+interface CiTemplateInputRow extends CiTemplateUsageRow {
+  input_name: string;
+  value_type: string; // 'static' | 'dynamic'
+  value: string | null;
+}
+
 interface AllRows {
   project_snapshots: ProjectSnapshotRow[];
   dependencies: DependencyRow[];
@@ -141,6 +160,8 @@ interface AllRows {
   component_prop_usages: ComponentPropUsageRow[];
   function_usages: FunctionUsageRow[];
   function_arg_usages: FunctionArgUsageRow[];
+  ci_template_usages: CiTemplateUsageRow[];
+  ci_template_inputs: CiTemplateInputRow[];
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
@@ -280,6 +301,8 @@ function buildAllRows(scans: ScanResult[], latestIds: Set<string>): AllRows {
   const compPropUsages: ComponentPropUsageRow[] = [];
   const funcUsages: FunctionUsageRow[] = [];
   const funcArgUsages: FunctionArgUsageRow[] = [];
+  const ciUsages: CiTemplateUsageRow[] = [];
+  const ciInputs: CiTemplateInputRow[] = [];
 
   for (const scan of scans) {
     const project_id = scan.projectSlug ?? scan.projectName ?? scan.id;
@@ -406,6 +429,36 @@ function buildAllRows(scans: ScanResult[], latestIds: Set<string>): AllRows {
         }
       }
     }
+
+    // ── ci_template_usages + ci_template_inputs ────────────────────────────
+    for (const ciUsage of (scan as { ciTemplateUsages?: unknown[] }).ciTemplateUsages ?? []) {
+      const u = ciUsage as {
+        file: string; line: number; provider: string; templateType: string;
+        source: string; version: string | null; inputs: Array<{ name: string; isDynamic: boolean; value: string | null }>;
+      };
+      const ciBase: CiTemplateUsageRow = {
+        project_id,
+        scanned_at,
+        code_at,
+        is_latest,
+        provider: u.provider,
+        template_type: u.templateType,
+        source: u.source,
+        version: u.version ?? null,
+        file_path: u.file,
+        line: u.line,
+      };
+      ciUsages.push(ciBase);
+
+      for (const inp of u.inputs ?? []) {
+        ciInputs.push({
+          ...ciBase,
+          input_name: inp.name,
+          value_type: inp.isDynamic ? 'dynamic' : 'static',
+          value: inp.isDynamic ? null : inp.value,
+        });
+      }
+    }
   }
 
   return {
@@ -415,6 +468,8 @@ function buildAllRows(scans: ScanResult[], latestIds: Set<string>): AllRows {
     component_prop_usages: compPropUsages,
     function_usages: funcUsages,
     function_arg_usages: funcArgUsages,
+    ci_template_usages: ciUsages,
+    ci_template_inputs: ciInputs,
   };
 }
 
