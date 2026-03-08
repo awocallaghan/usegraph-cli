@@ -466,6 +466,137 @@ async function toolQueryExportAdoptionTrend(args: {
   `);
 }
 
+// ─── CI template tools ────────────────────────────────────────────────────────
+
+async function toolListCiTemplates(args: {
+  provider?: string;
+  template_type?: string;
+}): Promise<unknown> {
+  const p = requireParquet('ci_template_usages');
+  const providerFilter = args.provider
+    ? `AND provider = '${sqlStr(args.provider)}'`
+    : '';
+  const typeFilter = args.template_type
+    ? `AND template_type = '${sqlStr(args.template_type)}'`
+    : '';
+  return queryParquet(`
+    SELECT
+      source,
+      provider,
+      template_type,
+      COUNT(DISTINCT project_id)::INTEGER AS project_count,
+      array_agg(DISTINCT version)         AS versions_seen,
+      array_agg(DISTINCT project_id)      AS projects
+    FROM read_parquet('${sqlStr(p)}')
+    WHERE is_latest = true
+      ${providerFilter}
+      ${typeFilter}
+    GROUP BY source, provider, template_type
+    ORDER BY project_count DESC
+    LIMIT 100
+  `);
+}
+
+async function toolQueryCiTemplateUsage(args: {
+  source: string;
+  provider?: string;
+}): Promise<unknown> {
+  const p = requireParquet('ci_template_usages');
+  const srcFilter = `AND source = '${sqlStr(args.source)}'`;
+  const providerFilter = args.provider
+    ? `AND provider = '${sqlStr(args.provider)}'`
+    : '';
+  return queryParquet(`
+    SELECT
+      project_id,
+      provider,
+      template_type,
+      version,
+      file_path,
+      line
+    FROM read_parquet('${sqlStr(p)}')
+    WHERE is_latest = true
+      ${srcFilter}
+      ${providerFilter}
+    ORDER BY project_id, file_path, line
+    LIMIT 200
+  `);
+}
+
+async function toolQueryCiTemplateInputs(args: {
+  source: string;
+  input_name?: string;
+}): Promise<unknown> {
+  const p = requireParquet('ci_template_inputs');
+  const srcFilter = `AND source = '${sqlStr(args.source)}'`;
+  const nameFilter = args.input_name
+    ? `AND input_name = '${sqlStr(args.input_name)}'`
+    : '';
+  return queryParquet(`
+    SELECT
+      input_name,
+      value_type,
+      value,
+      COUNT(DISTINCT project_id)::INTEGER AS project_count,
+      array_agg(DISTINCT project_id)      AS projects
+    FROM read_parquet('${sqlStr(p)}')
+    WHERE is_latest = true
+      ${srcFilter}
+      ${nameFilter}
+    GROUP BY input_name, value_type, value
+    ORDER BY input_name, project_count DESC
+    LIMIT 200
+  `);
+}
+
+async function toolQueryCiTemplateAdoptionTrend(args: {
+  source: string;
+  period_months?: number;
+}): Promise<unknown> {
+  const p = requireParquet('ci_template_usages');
+  const months = typeof args.period_months === 'number' ? args.period_months : 12;
+  const srcFilter = `AND source = '${sqlStr(args.source)}'`;
+  return queryParquet(`
+    WITH
+      months AS (
+        SELECT date_trunc('month', current_date - INTERVAL (g) MONTH)::DATE AS period
+        FROM (SELECT unnest(generate_series(0, ${months - 1})) AS g)
+      ),
+      project_scan_months AS (
+        SELECT DISTINCT
+          project_id,
+          date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::DATE AS scan_month
+        FROM read_parquet('${sqlStr(p)}')
+        WHERE true ${srcFilter}
+      ),
+      latest_per_project_month AS (
+        SELECT
+          m.period,
+          psm.project_id,
+          MAX(psm.scan_month) AS latest_scan_month
+        FROM months m
+        JOIN project_scan_months psm ON psm.scan_month <= m.period
+        GROUP BY m.period, psm.project_id
+      ),
+      adopters AS (
+        SELECT DISTINCT
+          project_id,
+          date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::DATE AS scan_month
+        FROM read_parquet('${sqlStr(p)}')
+        WHERE true ${srcFilter}
+      )
+    SELECT
+      lpm.period::VARCHAR AS period,
+      COUNT(DISTINCT lpm.project_id)::INTEGER AS adopting_projects
+    FROM latest_per_project_month lpm
+    JOIN adopters a
+      ON a.project_id = lpm.project_id
+      AND a.scan_month = lpm.latest_scan_month
+    GROUP BY lpm.period
+    ORDER BY lpm.period
+  `);
+}
+
 async function toolGetSourceContext(args: {
   project_id: string;
   file_path: string;
@@ -556,6 +687,14 @@ export async function callTool(
       );
     case 'get_source_context':
       return toolGetSourceContext(args as Parameters<typeof toolGetSourceContext>[0]);
+    case 'list_ci_templates':
+      return toolListCiTemplates(args as Parameters<typeof toolListCiTemplates>[0]);
+    case 'query_ci_template_usage':
+      return toolQueryCiTemplateUsage(args as Parameters<typeof toolQueryCiTemplateUsage>[0]);
+    case 'query_ci_template_inputs':
+      return toolQueryCiTemplateInputs(args as Parameters<typeof toolQueryCiTemplateInputs>[0]);
+    case 'query_ci_template_adoption_trend':
+      return toolQueryCiTemplateAdoptionTrend(args as Parameters<typeof toolQueryCiTemplateAdoptionTrend>[0]);
     default:
       throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32601 });
   }
@@ -769,6 +908,56 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
       }),
     },
     async (input) => wrap(await toolGetSourceContext(input as Parameters<typeof toolGetSourceContext>[0])),
+  );
+
+  // ── CI template tools ──────────────────────────────────────────────────────
+
+  server.tool(
+    {
+      name: 'list_ci_templates',
+      description: 'List all CI templates/actions used across the fleet, ranked by project adoption count. Optionally filter by provider (github|gitlab) or template_type.',
+      schema: z.object({
+        provider: z.string().optional().describe('Filter to a specific CI provider: "github" or "gitlab"'),
+        template_type: z.string().optional().describe('Filter to a specific template type, e.g. "action", "reusable_workflow", "gitlab_component"'),
+      }),
+    },
+    async (input) => wrap(await toolListCiTemplates(input as Parameters<typeof toolListCiTemplates>[0])),
+  );
+
+  server.tool(
+    {
+      name: 'query_ci_template_usage',
+      description: 'Show which projects use a specific CI template or action, including the version pinned and the CI file where it appears.',
+      schema: z.object({
+        source: z.string().describe('Template source identifier, e.g. "actions/checkout" or "org/platform/.github/workflows/deploy.yml"'),
+        provider: z.string().optional().describe('Filter to a specific CI provider: "github" or "gitlab"'),
+      }),
+    },
+    async (input) => wrap(await toolQueryCiTemplateUsage(input as Parameters<typeof toolQueryCiTemplateUsage>[0])),
+  );
+
+  server.tool(
+    {
+      name: 'query_ci_template_inputs',
+      description: 'Show the distribution of input values passed to a CI template across projects. Useful for understanding how teams configure a shared workflow or action.',
+      schema: z.object({
+        source: z.string().describe('Template source identifier, e.g. "actions/checkout"'),
+        input_name: z.string().optional().describe('Filter to a specific input name (e.g. "node-version"). Omit to return all inputs.'),
+      }),
+    },
+    async (input) => wrap(await toolQueryCiTemplateInputs(input as Parameters<typeof toolQueryCiTemplateInputs>[0])),
+  );
+
+  server.tool(
+    {
+      name: 'query_ci_template_adoption_trend',
+      description: 'Show how many projects adopted a CI template over time, grouped by month. Uses carry-forward logic so projects not scanned recently still contribute their last known state.',
+      schema: z.object({
+        source: z.string().describe('Template source identifier, e.g. "actions/checkout"'),
+        period_months: z.number().int().min(1).optional().describe('How many months back to look (default: 12)'),
+      }),
+    },
+    async (input) => wrap(await toolQueryCiTemplateAdoptionTrend(input as Parameters<typeof toolQueryCiTemplateAdoptionTrend>[0])),
   );
 
   const transport = new StdioTransport(server);
