@@ -14,6 +14,7 @@ import { parse as parseToml } from 'smol-toml';
 import {
   poetryLockfileParser,
   pdmLockfileParser,
+  uvLockfileParser,
   pipenvLockfileParser,
   requirementsTxtParser,
   pyprojectTomlParser,
@@ -31,6 +32,7 @@ const PYTHON_ROOT_SENTINELS = [
   'setup.cfg',
   'requirements.txt',
   'Pipfile',
+  'uv.lock',
 ];
 
 /** Virtual-env / build dirs to exclude during Python source scanning (used externally) */
@@ -243,7 +245,12 @@ function _detectPackageManager(
     return 'poetry';
   }
 
-  // 2. pyproject.toml has [tool.pdm] OR pdm.lock exists → pdm
+  // 2. uv.lock exists OR pyproject.toml has [tool.uv] → uv
+  if (has('uv.lock') || (pyprojectDoc && _hasTool(pyprojectDoc, 'uv'))) {
+    return 'uv';
+  }
+
+  // 3. pyproject.toml has [tool.pdm] OR pdm.lock exists → pdm
   if ((pyprojectDoc && _hasTool(pyprojectDoc, 'pdm')) || has('pdm.lock')) {
     return 'pdm';
   }
@@ -322,6 +329,18 @@ function _parseDependencies(
           return requirementsTxtParser.parse(read('requirements.txt'));
         }
         return [];
+
+      case 'uv': {
+        const entries = pyprojectRaw ? pyprojectTomlParser.parse(pyprojectRaw) : [];
+        if (has('uv.lock')) {
+          const resolved = uvLockfileParser.parse(read('uv.lock'));
+          for (const entry of entries) {
+            const ver = resolved.get(entry.name);
+            if (ver) _applyResolvedVersion(entry, ver);
+          }
+        }
+        return entries;
+      }
 
       case 'hatch':
       default:

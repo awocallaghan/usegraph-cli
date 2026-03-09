@@ -45,6 +45,7 @@ const PYTHON_PROJECTS = [
   join(FIXTURES_ROOT, 'apps', 'py-django'),
   join(FIXTURES_ROOT, 'apps', 'py-worker'),
   join(FIXTURES_ROOT, 'apps', 'py-service'),
+  join(FIXTURES_ROOT, 'apps', 'py-uv'),
 ];
 
 const DEV_STORE   = join(REPO_ROOT, '.dev-usegraph');
