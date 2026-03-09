@@ -354,7 +354,7 @@ async function toolQueryComponentAdoptionTrend(args: {
       project_scan_months AS (
         SELECT DISTINCT
           project_id,
-          date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::DATE AS scan_month
+          date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS scan_month
         FROM read_parquet('${sqlStr(p)}')
         WHERE (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)
           ${pkgFilter}
@@ -372,7 +372,7 @@ async function toolQueryComponentAdoptionTrend(args: {
       adopters AS (
         SELECT DISTINCT
           project_id,
-          date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::DATE AS scan_month
+          date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS scan_month
         FROM read_parquet('${sqlStr(p)}')
         WHERE (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)
           ${pkgFilter}
@@ -454,7 +454,7 @@ async function toolQueryExportAdoptionTrend(args: {
       project_scan_months AS (
         SELECT DISTINCT
           project_id,
-          date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::DATE AS scan_month
+          date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS scan_month
         FROM read_parquet('${sqlStr(p)}')
         WHERE (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)
           ${pkgFilter}
@@ -472,7 +472,7 @@ async function toolQueryExportAdoptionTrend(args: {
       adopters AS (
         SELECT DISTINCT
           project_id,
-          date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::DATE AS scan_month
+          date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS scan_month
         FROM read_parquet('${sqlStr(p)}')
         WHERE (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)
           ${pkgFilter}
@@ -589,7 +589,7 @@ async function toolQueryCiTemplateAdoptionTrend(args: {
       project_scan_months AS (
         SELECT DISTINCT
           project_id,
-          date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::DATE AS scan_month
+          date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS scan_month
         FROM read_parquet('${sqlStr(p)}')
         WHERE true ${srcFilter}
       ),
@@ -605,7 +605,7 @@ async function toolQueryCiTemplateAdoptionTrend(args: {
       adopters AS (
         SELECT DISTINCT
           project_id,
-          date_trunc('month', COALESCE(code_at, scanned_at)::TIMESTAMP)::DATE AS scan_month
+          date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS scan_month
         FROM read_parquet('${sqlStr(p)}')
         WHERE true ${srcFilter}
       )
