@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - CI template scanning: detect GitHub Actions (`.github/workflows/*.yml`) and GitLab CI (`.gitlab-ci.yml`) template/action usage across projects
+- Basic Python scanning support: detect package manager, framework and dependencies
 
 ## [0.1.1] - 2026-03-06
 
