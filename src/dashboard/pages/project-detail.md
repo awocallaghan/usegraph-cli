@@ -55,7 +55,7 @@ const [allSnapshots, deps, componentUsages, functionUsages, scanHistory] = await
 
   db.query(
     `SELECT package_name, version_resolved, version_range, dep_type,
-            version_is_prerelease, is_internal, language
+            version_is_prerelease, language
      FROM dependencies WHERE project_id = '${safeId}' AND is_latest = true
      ORDER BY dep_type, package_name`
   ).then(r => Array.from(r)),
@@ -160,7 +160,6 @@ const depPrereleaseOnly = view(Inputs.toggle({ label: "Prerelease only" }))
 ```
 
 ```js
-const depInternalOnly = view(Inputs.toggle({ label: "Internal only" }))
 ```
 
 ```js
@@ -169,7 +168,6 @@ const filteredDeps = deps.filter(d => {
   if (depTypeFilter !== "All" && d.dep_type !== depTypeFilter) return false;
   if (depPkgSearch.trim() && !d.package_name.includes(depPkgSearch.trim())) return false;
   if (depPrereleaseOnly && !d.version_is_prerelease) return false;
-  if (depInternalOnly && !d.is_internal) return false;
   return true;
 });
 ```

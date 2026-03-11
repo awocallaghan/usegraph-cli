@@ -69,7 +69,6 @@ interface DependencyRow {
   version_range: string;
   version_resolved: string | null;
   dep_type: string;
-  is_internal: boolean;
 }
 
 interface SnapshotRow {
@@ -243,7 +242,7 @@ async function loadProjectDetail(
       LIMIT 1
     `),
     queryParquet(`
-      SELECT package_name, version_range, version_resolved, dep_type, is_internal
+      SELECT package_name, version_range, version_resolved, dep_type
       FROM read_parquet('${sqlStr(dp)}')
       WHERE project_id = '${id}' AND is_latest = true
       ORDER BY dep_type, package_name

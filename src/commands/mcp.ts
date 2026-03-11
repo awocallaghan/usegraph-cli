@@ -5,14 +5,16 @@
  *
  *   Discovery:
  *     get_scan_metadata         — overall stats about the data store
+ *     get_ecosystem_summary     — one-shot summary (counts, top packages, tooling)
  *     list_projects             — filtered project list
  *     list_packages             — packages used across projects
  *     get_project_snapshot      — full detail for one project
  *
  *   Dependencies:
- *     query_dependency_versions — version distribution for a package
- *     query_prerelease_usage    — which projects use prerelease builds
- *     query_tooling_distribution— breakdown of a tooling category
+ *     query_dependency_versions      — version distribution for a package
+ *     query_prerelease_usage         — which projects use prerelease builds
+ *     query_dependency_adoption_trend — adoption over time (any npm/Python package)
+ *     query_tooling_distribution    — breakdown of a tooling category
  *
  *   Components:
  *     query_component_usage     — where a component is used
@@ -67,11 +69,99 @@ async function toolGetScanMetadata(): Promise<unknown> {
   return rows[0] ?? {};
 }
 
+const ECOSYSTEM_TOOLING_CATEGORIES = [
+  'framework',
+  'build_tool',
+  'package_manager',
+  'test_framework',
+  'python_framework',
+  'python_package_manager',
+] as const;
+
+async function toolGetEcosystemSummary(args: {
+  top_packages_limit?: number;
+  language?: 'javascript' | 'python';
+}): Promise<unknown> {
+  const limit = Math.min(Math.max(1, args.top_packages_limit ?? 20), 200);
+  const sp = requireParquet('project_snapshots');
+  const dp = requireParquet('dependencies');
+  const langFilter = args.language === 'python'
+    ? `AND (python_package_manager IS NOT NULL OR python_framework IS NOT NULL)`
+    : args.language === 'javascript'
+    ? `AND (python_package_manager IS NULL AND python_framework IS NULL)`
+    : '';
+
+  const [projectCountsRows, jsPackages, pyPackages, toolingResult] = await Promise.all([
+    queryParquet(`
+      SELECT
+        CASE
+          WHEN (python_package_manager IS NOT NULL OR python_framework IS NOT NULL)
+               AND (framework IS NOT NULL OR package_manager IS NOT NULL) THEN 'both'
+          WHEN python_package_manager IS NOT NULL OR python_framework IS NOT NULL THEN 'python'
+          ELSE 'javascript'
+        END AS language,
+        COUNT(DISTINCT project_id)::INTEGER AS project_count
+      FROM read_parquet('${sqlStr(sp)}')
+      WHERE is_latest = true ${langFilter}
+      GROUP BY 1
+    `),
+    args.language === 'python'
+      ? Promise.resolve([])
+      : queryParquet(`
+          SELECT package_name, COUNT(DISTINCT project_id)::INTEGER AS project_count
+          FROM read_parquet('${sqlStr(dp)}')
+          WHERE is_latest = true AND language = 'javascript'
+          GROUP BY package_name
+          ORDER BY project_count DESC
+          LIMIT ${limit}
+        `),
+    args.language === 'javascript'
+      ? Promise.resolve([])
+      : queryParquet(`
+          SELECT package_name, COUNT(DISTINCT project_id)::INTEGER AS project_count
+          FROM read_parquet('${sqlStr(dp)}')
+          WHERE is_latest = true AND language = 'python'
+          GROUP BY package_name
+          ORDER BY project_count DESC
+          LIMIT ${limit}
+        `),
+    toolQueryToolingDistribution({
+      categories: [...ECOSYSTEM_TOOLING_CATEGORIES],
+    }) as Promise<Record<string, Array<{ value: string; project_count: number; projects: string[] }>>>,
+  ]);
+
+  const project_counts_by_language: Record<string, number> = {};
+  for (const row of projectCountsRows as Array<{ language: string; project_count: number }>) {
+    project_counts_by_language[row.language] = row.project_count;
+  }
+
+  const top_packages: Record<string, Array<{ package_name: string; project_count: number }>> = {};
+  if (!args.language || args.language === 'javascript') {
+    top_packages.javascript = (jsPackages as Array<{ package_name: string; project_count: number }>).map((r) => ({
+      package_name: r.package_name,
+      project_count: r.project_count,
+    }));
+  }
+  if (!args.language || args.language === 'python') {
+    top_packages.python = (pyPackages as Array<{ package_name: string; project_count: number }>).map((r) => ({
+      package_name: r.package_name,
+      project_count: r.project_count,
+    }));
+  }
+
+  return {
+    project_counts_by_language,
+    top_packages,
+    tooling: toolingResult,
+  };
+}
+
 async function toolListProjects(args: {
   framework?: string;
   build_tool?: string;
   stale_after_days?: number;
   language?: 'javascript' | 'python';
+  count_only?: boolean;
 }): Promise<unknown> {
   const p = requireParquet('project_snapshots');
   const frameworkFilter = args.framework
@@ -86,6 +176,18 @@ async function toolListProjects(args: {
     : args.language === 'javascript'
     ? `AND (python_package_manager IS NULL AND python_framework IS NULL)`
     : '';
+  if (args.count_only === true) {
+    const rows = await queryParquet(`
+      SELECT COUNT(DISTINCT project_id)::INTEGER AS project_count
+      FROM read_parquet('${sqlStr(p)}')
+      WHERE is_latest = true
+        ${frameworkFilter}
+        ${buildToolFilter}
+        ${languageFilter}
+    `);
+    const count = (rows[0] as { project_count: number })?.project_count ?? 0;
+    return { project_count: count, ...(args.language && { language: args.language }) };
+  }
   return queryParquet(`
     SELECT
       project_id,
@@ -117,8 +219,10 @@ async function toolListProjects(args: {
 async function toolListPackages(args: {
   scope?: string;
   dep_type?: string;
-  internal_only?: boolean;
   language?: string;
+  limit?: number;
+  include_versions?: boolean;
+  min_projects?: number;
 }): Promise<unknown> {
   const p = requireParquet('dependencies');
   const scopeFilter = args.scope
@@ -127,25 +231,32 @@ async function toolListPackages(args: {
   const depTypeFilter = args.dep_type
     ? `AND dep_type = '${sqlStr(args.dep_type)}'`
     : '';
-  const internalFilter =
-    args.internal_only === true ? `AND is_internal = true` : '';
   const langFilter = args.language
     ? `AND language = '${sqlStr(args.language)}'`
     : '';
+  const limit = Math.min(Math.max(1, args.limit ?? 100), 1000);
+  const havingFilter =
+    typeof args.min_projects === 'number' && args.min_projects >= 1
+      ? `HAVING COUNT(DISTINCT project_id) >= ${args.min_projects}`
+      : '';
+  const versionsSelect =
+    args.include_versions !== false
+      ? ', array_agg(DISTINCT version_resolved) AS versions_seen'
+      : '';
   return queryParquet(`
     SELECT
       package_name,
-      COUNT(DISTINCT project_id)::INTEGER AS project_count,
-      array_agg(DISTINCT version_resolved) AS versions_seen
+      COUNT(DISTINCT project_id)::INTEGER AS project_count
+      ${versionsSelect}
     FROM read_parquet('${sqlStr(p)}')
     WHERE is_latest = true
       ${scopeFilter}
       ${depTypeFilter}
-      ${internalFilter}
       ${langFilter}
     GROUP BY package_name
+    ${havingFilter}
     ORDER BY project_count DESC
-    LIMIT 100
+    LIMIT ${limit}
   `);
 }
 
@@ -161,7 +272,7 @@ async function toolGetProjectSnapshot(args: { project_id: string }): Promise<unk
       LIMIT 1
     `),
     queryParquet(`
-      SELECT package_name, version_range, version_resolved, dep_type, is_internal
+      SELECT package_name, version_range, version_resolved, dep_type
       FROM read_parquet('${sqlStr(dp)}')
       WHERE project_id = '${id}' AND is_latest = true
       ORDER BY dep_type, package_name
@@ -235,27 +346,102 @@ async function toolQueryPrereleaseUsage(args: {
   `);
 }
 
-async function toolQueryToolingDistribution(args: { category: string }): Promise<unknown> {
-  // CRITICAL: validate against allowlist before SQL column interpolation
-  if (!TOOLING_CATEGORY_ALLOWLIST.has(args.category)) {
-    throw new Error(
-      `Invalid category "${args.category}". Must be one of: ${Array.from(TOOLING_CATEGORY_ALLOWLIST).join(', ')}`,
-    );
-  }
-  const col = args.category; // safe — validated above
-  const p = requireParquet('project_snapshots');
+async function toolQueryDependencyAdoptionTrend(args: {
+  package_name: string;
+  language?: string;
+  period_months?: number;
+}): Promise<unknown> {
+  const p = requireParquet('dependencies');
+  const months = typeof args.period_months === 'number' ? args.period_months : 12;
+  const pkgFilter = `AND package_name = '${sqlStr(args.package_name)}'`;
+  const langFilter = args.language
+    ? `AND language = '${sqlStr(args.language)}'`
+    : '';
+  // Carry-forward CTE: for each month in the window, count projects whose most recent scan
+  // up to that month showed them depending on this package. Supports any npm or Python package.
   return queryParquet(`
+    WITH
+      months AS (
+        SELECT date_trunc('month', current_date - INTERVAL (g) MONTH)::DATE AS period
+        FROM (SELECT unnest(generate_series(0, ${months - 1})) AS g)
+      ),
+      project_scan_months AS (
+        SELECT DISTINCT
+          project_id,
+          date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS scan_month
+        FROM read_parquet('${sqlStr(p)}')
+        WHERE is_latest = true
+          ${pkgFilter}
+          ${langFilter}
+      ),
+      latest_per_project_month AS (
+        SELECT
+          m.period,
+          psm.project_id,
+          MAX(psm.scan_month) AS latest_scan_month
+        FROM months m
+        JOIN project_scan_months psm ON psm.scan_month <= m.period
+        GROUP BY m.period, psm.project_id
+      ),
+      adopters AS (
+        SELECT DISTINCT
+          project_id,
+          date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS scan_month
+        FROM read_parquet('${sqlStr(p)}')
+        WHERE is_latest = true
+          ${pkgFilter}
+          ${langFilter}
+      )
     SELECT
-      ${col}::VARCHAR                       AS value,
-      COUNT(DISTINCT project_id)::INTEGER   AS project_count,
-      array_agg(DISTINCT project_id)        AS projects
-    FROM read_parquet('${sqlStr(p)}')
-    WHERE is_latest = true
-      AND ${col} IS NOT NULL
-    GROUP BY ${col}
-    ORDER BY project_count DESC
-    LIMIT 100
+      lpm.period::VARCHAR AS period,
+      COUNT(DISTINCT lpm.project_id)::INTEGER AS adopting_projects
+    FROM latest_per_project_month lpm
+    JOIN adopters a
+      ON a.project_id = lpm.project_id
+      AND a.scan_month = lpm.latest_scan_month
+    GROUP BY lpm.period
+    ORDER BY lpm.period
   `);
+}
+
+async function toolQueryToolingDistribution(args: {
+  category?: string;
+  categories?: string[];
+}): Promise<unknown> {
+  const rawCategories = args.categories ?? (args.category ? [args.category] : []);
+  const categories = rawCategories.length > 0
+    ? rawCategories
+    : Array.from(TOOLING_CATEGORY_ALLOWLIST);
+  for (const c of categories) {
+    if (!TOOLING_CATEGORY_ALLOWLIST.has(c)) {
+      throw new Error(
+        `Invalid category "${c}". Must be one of: ${Array.from(TOOLING_CATEGORY_ALLOWLIST).join(', ')}`,
+      );
+    }
+  }
+  const p = requireParquet('project_snapshots');
+  const results = await Promise.all(
+    categories.map(async (col) => {
+      const rows = await queryParquet(`
+        SELECT
+          ${col}::VARCHAR                       AS value,
+          COUNT(DISTINCT project_id)::INTEGER   AS project_count,
+          array_agg(DISTINCT project_id)        AS projects
+        FROM read_parquet('${sqlStr(p)}')
+        WHERE is_latest = true
+          AND ${col} IS NOT NULL
+        GROUP BY ${col}
+        ORDER BY project_count DESC
+        LIMIT 100
+      `);
+      return { category: col, rows };
+    }),
+  );
+  const out: Record<string, Array<{ value: string; project_count: number; projects: string[] }>> = {};
+  for (const { category, rows } of results) {
+    out[category] = rows as Array<{ value: string; project_count: number; projects: string[] }>;
+  }
+  return out;
 }
 
 async function toolQueryComponentUsage(args: {
@@ -675,6 +861,8 @@ export async function callTool(
   switch (name) {
     case 'get_scan_metadata':
       return toolGetScanMetadata();
+    case 'get_ecosystem_summary':
+      return toolGetEcosystemSummary(args as Parameters<typeof toolGetEcosystemSummary>[0]);
     case 'list_projects':
       return toolListProjects(args as Parameters<typeof toolListProjects>[0]);
     case 'list_packages':
@@ -688,6 +876,10 @@ export async function callTool(
     case 'query_prerelease_usage':
       return toolQueryPrereleaseUsage(
         args as Parameters<typeof toolQueryPrereleaseUsage>[0],
+      );
+    case 'query_dependency_adoption_trend':
+      return toolQueryDependencyAdoptionTrend(
+        args as Parameters<typeof toolQueryDependencyAdoptionTrend>[0],
       );
     case 'query_tooling_distribution':
       return toolQueryToolingDistribution(
@@ -773,13 +965,26 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
 
   server.tool(
     {
+      name: 'get_ecosystem_summary',
+      description: 'One-shot summary: project counts by language (javascript, python, both), top N packages per language (no versions_seen), and key tooling distributions (framework, build_tool, package_manager, test_framework, python_framework, python_package_manager). Reduces round-trips for "current state by language".',
+      schema: z.object({
+        top_packages_limit: z.number().int().min(1).max(200).optional().describe('Max number of top packages per language (default: 20)'),
+        language: z.enum(['javascript', 'python']).optional().describe('If set, limit summary to this language only'),
+      }),
+    },
+    async (input) => wrap(await toolGetEcosystemSummary(input as Parameters<typeof toolGetEcosystemSummary>[0])),
+  );
+
+  server.tool(
+    {
       name: 'list_projects',
-      description: 'List projects with their latest scan metadata, optionally filtered by framework, build tool, or language.',
+      description: 'List projects with their latest scan metadata, optionally filtered by framework, build tool, or language. Use count_only: true to get just the project count without the full list.',
       schema: z.object({
         framework: z.string().optional().describe('Filter to projects using this framework (e.g. "react", "next", "fastapi", "flask")'),
         build_tool: z.string().optional().describe('Filter to projects using this build tool (e.g. "vite", "webpack")'),
         stale_after_days: z.number().int().min(1).optional().describe('Flag projects not scanned within this many days'),
         language: z.enum(['javascript', 'python']).optional().describe('Filter to projects of a specific language ecosystem'),
+        count_only: z.boolean().optional().describe('If true, return only { project_count, language? } without the project list'),
       }),
     },
     async (input) => wrap(await toolListProjects(input as Parameters<typeof toolListProjects>[0])),
@@ -788,12 +993,14 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'list_packages',
-      description: 'List packages (npm or Python) detected across all projects, ranked by adoption count. Filter by scope, dependency type, internal-only, or language.',
+      description: 'List packages (npm or Python) detected across all projects, ranked by adoption count. Filter by scope, dependency type, or language.',
       schema: z.object({
         scope: z.string().optional().describe('npm scope prefix, e.g. "@acme" to filter to @acme/* packages'),
         dep_type: z.string().optional().describe('Dependency section: "dependencies", "devDependencies", "peerDependencies", or "optionalDependencies"'),
-        internal_only: z.boolean().optional().describe('If true, return only packages flagged as internal'),
         language: z.string().optional().describe('Filter to a specific language ecosystem: "javascript" or "python"'),
+        limit: z.number().int().min(1).max(1000).optional().describe('Max number of packages to return (default: 100)'),
+        include_versions: z.boolean().optional().describe('If false, omit versions_seen to reduce payload size (default: true)'),
+        min_projects: z.number().int().min(1).optional().describe('Only include packages used in at least this many projects'),
       }),
     },
     async (input) => wrap(await toolListPackages(input as Parameters<typeof toolListPackages>[0])),
@@ -840,10 +1047,24 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
 
   server.tool(
     {
-      name: 'query_tooling_distribution',
-      description: 'Show the distribution of a tooling category across all projects. JS categories: framework, build_tool, package_manager, test_framework, linter, formatter, css_approach, typescript. Python categories: python_framework, python_package_manager, python_version.',
+      name: 'query_dependency_adoption_trend',
+      description: 'Show how many projects have a given package as a dependency over time, grouped by month. Works for any npm or Python package. Each month reflects each project\'s last known state; projects not scanned within the window are carried forward. Returns an empty array if the package is not found in the dependency graph or no scan data exists in the requested period.',
       schema: z.object({
-        category: z.enum(Array.from(TOOLING_CATEGORY_ALLOWLIST) as [string, ...string[]]).describe('Tooling category column name, e.g. "framework", "python_framework", "python_package_manager"'),
+        package_name: z.string().describe('Exact package name, e.g. "react", "webpack", "fastapi"'),
+        language: z.string().optional().describe('Filter to "javascript" or "python"'),
+        period_months: z.number().int().min(1).optional().describe('How many months back to look (default: 12)'),
+      }),
+    },
+    async (input) => wrap(await toolQueryDependencyAdoptionTrend(input as Parameters<typeof toolQueryDependencyAdoptionTrend>[0])),
+  );
+
+  server.tool(
+    {
+      name: 'query_tooling_distribution',
+      description: 'Show the distribution of one or more tooling categories across all projects. Returns a keyed object, e.g. { "framework": [...], "build_tool": [...] }. Categories: framework, build_tool, package_manager, test_framework, linter, formatter, css_approach, typescript, python_framework, python_package_manager, python_version. Omit both params to get all categories.',
+      schema: z.object({
+        category: z.string().optional().describe('Single category (use categories for multiple)'),
+        categories: z.array(z.string()).optional().describe('Category names to query in one call, e.g. ["framework", "build_tool", "test_framework"]'),
       }),
     },
     async (input) => wrap(await toolQueryToolingDistribution(input as Parameters<typeof toolQueryToolingDistribution>[0])),
@@ -883,9 +1104,9 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_component_adoption_trend',
-      description: 'Show how many projects adopted a component (or an entire package) over time, grouped by month. Each month reflects each project\'s last known state as of that month — projects not scanned within the window are carried forward from their most recent scan, so the count accurately represents adoption rather than scan activity.',
+      description: 'Show how many projects use JSX components from an npm package over time, grouped by month. Data comes from component_usages (JSX call sites only). For general dependency adoption (e.g. webpack, @playwright/test), use query_dependency_adoption_trend instead. Returns an empty array if the package has no component usage data in the graph or no scans in the requested period.',
       schema: z.object({
-        package_name: z.string().describe('npm package name'),
+        package_name: z.string().describe('npm package that exports the components'),
         component_name: z.string().optional().describe('Optional: filter to a specific component'),
         period_months: z.number().int().min(1).optional().describe('How many months back to look (default: 12)'),
       }),

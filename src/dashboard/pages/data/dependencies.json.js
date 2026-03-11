@@ -48,8 +48,7 @@ const [topPackagesRaw, allDeps, prereleaseExposure] = await Promise.all([
        COUNT(DISTINCT CASE WHEN dep_type = 'devDependencies'      THEN project_id END)::INTEGER AS dev_count,
        COUNT(DISTINCT CASE WHEN dep_type = 'peerDependencies'     THEN project_id END)::INTEGER AS peer_count,
        COUNT(DISTINCT CASE WHEN dep_type = 'optionalDependencies' THEN project_id END)::INTEGER AS optional_count,
-       bool_or(version_is_prerelease) AS any_prerelease,
-       bool_or(is_internal) AS any_internal
+       bool_or(version_is_prerelease) AS any_prerelease
      FROM ${deps}
      WHERE is_latest = true
      GROUP BY package_name
@@ -60,7 +59,7 @@ const [topPackagesRaw, allDeps, prereleaseExposure] = await Promise.all([
   queryParquet(
     `SELECT project_id, package_name, version_range, version_resolved,
             version_major, version_minor, version_patch,
-            version_prerelease, version_is_prerelease, dep_type, is_internal,
+            version_prerelease, version_is_prerelease, dep_type,
             ${langExpr}
      FROM ${deps}
      WHERE is_latest = true

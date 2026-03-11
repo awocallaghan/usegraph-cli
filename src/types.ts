@@ -142,8 +142,6 @@ export interface ScanResult {
   packageJson: Record<string, unknown> | null;
   /** Packages whose usage was tracked in detail */
   targetPackages: string[];
-  /** Package names (or prefixes ending with '/') marked as internal at scan time */
-  internalPackages: string[];
   fileCount: number;
   files: FileAnalysis[];
   summary: ScanSummary;

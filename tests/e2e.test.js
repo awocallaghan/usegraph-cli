@@ -254,9 +254,10 @@ test('query_export_usage: formatDate is called in multiple projects', async () =
 });
 
 test('query_tooling_distribution: test_framework includes jest and vitest', async () => {
-  const rows = await callTool('query_tooling_distribution', {
+  const result = await callTool('query_tooling_distribution', {
     category: 'test_framework',
   });
+  const rows = result.test_framework ?? [];
   const values = rows.map((r) => r.value);
   assert.ok(values.includes('jest'), `jest not found in test_framework distribution: ${JSON.stringify(values)}`);
   assert.ok(values.includes('vitest'), `vitest not found in test_framework distribution: ${JSON.stringify(values)}`);

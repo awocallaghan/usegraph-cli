@@ -41,7 +41,6 @@ if (existsSync(srcFile)) {
            NULL::VARCHAR    AS version_prerelease,
            NULL::BOOLEAN    AS version_is_prerelease,
            NULL::VARCHAR    AS dep_type,
-           NULL::BOOLEAN    AS is_internal,
            NULL::VARCHAR    AS language
          WHERE false
        ) TO '${tmpFile}' (FORMAT PARQUET)`,
