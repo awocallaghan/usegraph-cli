@@ -185,10 +185,12 @@ Options:
 | Category     | Tool name                        | Description                                             |
 |--------------|----------------------------------|---------------------------------------------------------|
 | Discovery    | `get_scan_metadata`              | Overall stats: project count, total usages, date range  |
+| Discovery    | `query_scan_coverage`           | Project count scanned per month (for interpreting adoption trends) |
 | Discovery    | `list_projects`                  | Filtered list of scanned projects with tooling info     |
-| Discovery    | `list_packages`                  | All packages tracked across projects                    |
+| Discovery    | `list_packages`                  | All packages tracked across projects (use `scope` / `name_prefix` for internal) |
 | Discovery    | `get_project_snapshot`           | Full tooling and dependency detail for one project      |
 | Dependencies | `query_dependency_versions`      | Version distribution for a given package across orgs   |
+| Dependencies | `query_dependency_adoption_trend` | Dependency adoption over time (JS and Python)          |
 | Dependencies | `query_prerelease_usage`         | Which projects use prerelease (`alpha`/`beta`/`rc`) deps |
 | Dependencies | `query_tooling_distribution`     | Breakdown of a tooling category (e.g. test frameworks)  |
 | Components   | `query_component_usage`          | Where a JSX component is used across projects           |
@@ -197,6 +199,8 @@ Options:
 | Functions    | `query_export_usage`             | Where a function export is called across projects       |
 | Functions    | `query_export_adoption_trend`    | Export adoption over time                               |
 | Functions    | `get_source_context`             | Source snippet for a specific prop or arg call site     |
+
+Adoption trends (`query_dependency_adoption_trend`) work for both JavaScript and Python packages. Use `query_scan_coverage` to compare with scan rollout when interpreting trend slopes.
 
 **Wiring into Claude Desktop:**
 

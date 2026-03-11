@@ -5,6 +5,7 @@
  *
  *   Discovery:
  *     get_scan_metadata         — overall stats about the data store
+ *     query_scan_coverage       — project count scanned per month (for interpreting adoption trends)
  *     get_ecosystem_summary     — one-shot summary (counts, top packages, tooling)
  *     list_projects             — filtered project list
  *     list_packages             — packages used across projects
@@ -67,6 +68,33 @@ async function toolGetScanMetadata(): Promise<unknown> {
     FROM read_parquet('${sqlStr(snapshotsPath)}')
   `);
   return rows[0] ?? {};
+}
+
+async function toolQueryScanCoverage(args: {
+  period_months?: number;
+}): Promise<unknown> {
+  const p = requireParquet('project_snapshots');
+  const months = typeof args.period_months === 'number' ? args.period_months : 12;
+  return queryParquet(`
+    WITH
+      months AS (
+        SELECT date_trunc('month', current_date - INTERVAL (g) MONTH)::DATE AS period
+        FROM (SELECT unnest(generate_series(0, ${months - 1})) AS g)
+      ),
+      by_month AS (
+        SELECT
+          date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS period,
+          COUNT(DISTINCT project_id)::INTEGER AS projects_scanned
+        FROM read_parquet('${sqlStr(p)}')
+        GROUP BY 1
+      )
+    SELECT
+      m.period::VARCHAR AS period,
+      COALESCE(b.projects_scanned, 0)::INTEGER AS projects_scanned
+    FROM months m
+    LEFT JOIN by_month b ON b.period = m.period
+    ORDER BY m.period
+  `);
 }
 
 const ECOSYSTEM_TOOLING_CATEGORIES = [
@@ -218,6 +246,7 @@ async function toolListProjects(args: {
 
 async function toolListPackages(args: {
   scope?: string;
+  name_prefix?: string;
   dep_type?: string;
   language?: string;
   limit?: number;
@@ -227,6 +256,9 @@ async function toolListPackages(args: {
   const p = requireParquet('dependencies');
   const scopeFilter = args.scope
     ? `AND package_name LIKE '${sqlStr(args.scope)}/%'`
+    : '';
+  const namePrefixFilter = args.name_prefix
+    ? `AND package_name LIKE '${sqlStr(args.name_prefix)}%'`
     : '';
   const depTypeFilter = args.dep_type
     ? `AND dep_type = '${sqlStr(args.dep_type)}'`
@@ -251,6 +283,7 @@ async function toolListPackages(args: {
     FROM read_parquet('${sqlStr(p)}')
     WHERE is_latest = true
       ${scopeFilter}
+      ${namePrefixFilter}
       ${depTypeFilter}
       ${langFilter}
     GROUP BY package_name
@@ -861,6 +894,8 @@ export async function callTool(
   switch (name) {
     case 'get_scan_metadata':
       return toolGetScanMetadata();
+    case 'query_scan_coverage':
+      return toolQueryScanCoverage(args as Parameters<typeof toolQueryScanCoverage>[0]);
     case 'get_ecosystem_summary':
       return toolGetEcosystemSummary(args as Parameters<typeof toolGetEcosystemSummary>[0]);
     case 'list_projects':
@@ -965,6 +1000,17 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
 
   server.tool(
     {
+      name: 'query_scan_coverage',
+      description: 'Return how many projects had at least one scan in each month over a time window. Use this to interpret adoption trends: low counts in early months may be due to fewer projects scanned in that period rather than lower adoption. Compare with query_dependency_adoption_trend to distinguish real adoption from scan rollout.',
+      schema: z.object({
+        period_months: z.number().int().min(1).optional().describe('How many months back to include (default: 12)'),
+      }),
+    },
+    async (input) => wrap(await toolQueryScanCoverage(input as Parameters<typeof toolQueryScanCoverage>[0])),
+  );
+
+  server.tool(
+    {
       name: 'get_ecosystem_summary',
       description: 'One-shot summary: project counts by language (javascript, python, both), top N packages per language (no versions_seen), and key tooling distributions (framework, build_tool, package_manager, test_framework, python_framework, python_package_manager). Reduces round-trips for "current state by language".',
       schema: z.object({
@@ -993,9 +1039,10 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'list_packages',
-      description: 'List packages (npm or Python) detected across all projects, ranked by adoption count. Filter by scope, dependency type, or language.',
+      description: 'List packages (npm or Python) detected across all projects, ranked by adoption count. Filter by scope (npm), name_prefix (e.g. Python internal packages), dependency type, or language. For internal packages use scope (npm, e.g. "@mintel") and name_prefix (Python, e.g. "mintel").',
       schema: z.object({
         scope: z.string().optional().describe('npm scope prefix, e.g. "@acme" to filter to @acme/* packages'),
+        name_prefix: z.string().optional().describe('Filter to packages whose name starts with this string (e.g. "mintel" for Python internal packages)'),
         dep_type: z.string().optional().describe('Dependency section: "dependencies", "devDependencies", "peerDependencies", or "optionalDependencies"'),
         language: z.string().optional().describe('Filter to a specific language ecosystem: "javascript" or "python"'),
         limit: z.number().int().min(1).max(1000).optional().describe('Max number of packages to return (default: 100)'),
@@ -1048,7 +1095,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_dependency_adoption_trend',
-      description: 'Show how many projects have a given package as a dependency over time, grouped by month. Works for any npm or Python package. Each month reflects each project\'s last known state; projects not scanned within the window are carried forward. Returns an empty array if the package is not found in the dependency graph or no scan data exists in the requested period.',
+      description: 'Show how many projects have a given package as a dependency over time, grouped by month. Works for both npm and Python packages (e.g. react, webpack, fastapi, mintel-logging). Each month reflects each project\'s last known state; projects not scanned within the window are carried forward. Returns an empty array if the package is not in the graph or has no scan data in the requested period. Counts in early months may be low if fewer projects were scanned then; interpret slopes with caution and use query_scan_coverage to compare with scan rollout.',
       schema: z.object({
         package_name: z.string().describe('Exact package name, e.g. "react", "webpack", "fastapi"'),
         language: z.string().optional().describe('Filter to "javascript" or "python"'),
