@@ -293,21 +293,31 @@ async function toolListPackages(args: {
   `);
 }
 
-async function toolGetProjectSnapshot(args: { project_id: string }): Promise<unknown> {
+async function toolGetProjectSnapshot(args: {
+  project_id: string;
+  as_of_period?: string;
+}): Promise<unknown> {
   const sp = requireParquet('project_snapshots');
   const dp = requireParquet('dependencies');
   const id = sqlStr(args.project_id);
+  const asOfPeriod = args.as_of_period;
+  const periodFilter =
+    asOfPeriod != null && asOfPeriod !== ''
+      ? `AND date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE <= '${sqlStr(asOfPeriod)}'::DATE`
+      : '';
 
   const [snapshot, deps] = await Promise.all([
     queryParquet(`
       SELECT * FROM read_parquet('${sqlStr(sp)}')
       WHERE project_id = '${id}' AND is_latest = true
+      ${periodFilter}
       LIMIT 1
     `),
     queryParquet(`
       SELECT package_name, version_range, version_resolved, dep_type
       FROM read_parquet('${sqlStr(dp)}')
       WHERE project_id = '${id}' AND is_latest = true
+      ${periodFilter}
       ORDER BY dep_type, package_name
       LIMIT 500
     `),
@@ -321,6 +331,7 @@ async function toolQueryDependencyVersions(args: {
   dep_type?: string;
   include_prerelease?: boolean;
   language?: string;
+  as_of_period?: string;
 }): Promise<unknown> {
   const p = requireParquet('dependencies');
   const nameFilter = `AND package_name = '${sqlStr(args.package_name)}'`;
@@ -332,23 +343,59 @@ async function toolQueryDependencyVersions(args: {
   const langFilter = args.language
     ? `AND language = '${sqlStr(args.language)}'`
     : '';
+  const asOfPeriod = args.as_of_period;
+  if (asOfPeriod == null || asOfPeriod === '') {
+    return queryParquet(`
+      SELECT
+        version_resolved,
+        version_major,
+        version_minor,
+        version_patch,
+        version_prerelease,
+        COUNT(DISTINCT project_id)::INTEGER AS project_count,
+        array_agg(DISTINCT project_id)     AS projects
+      FROM read_parquet('${sqlStr(p)}')
+      WHERE is_latest = true
+        ${nameFilter}
+        ${depTypeFilter}
+        ${prereleaseFilter}
+        ${langFilter}
+      GROUP BY version_resolved, version_major, version_minor, version_patch, version_prerelease
+      ORDER BY version_major DESC, version_minor DESC, version_patch DESC
+      LIMIT 100
+    `);
+  }
+  // Restrict to projects whose last scan month is on or before as_of_period (same carry-forward as adoption trend).
+  const periodStr = sqlStr(asOfPeriod);
   return queryParquet(`
+    WITH deps AS (
+      SELECT
+        project_id,
+        version_resolved,
+        version_major,
+        version_minor,
+        version_patch,
+        version_prerelease,
+        date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS scan_month
+      FROM read_parquet('${sqlStr(p)}')
+      WHERE is_latest = true
+        ${nameFilter}
+        ${depTypeFilter}
+        ${prereleaseFilter}
+        ${langFilter}
+    )
     SELECT
-      version_resolved,
-      version_major,
-      version_minor,
-      version_patch,
-      version_prerelease,
-      COUNT(DISTINCT project_id)::INTEGER AS project_count,
-      array_agg(DISTINCT project_id)     AS projects
-    FROM read_parquet('${sqlStr(p)}')
-    WHERE is_latest = true
-      ${nameFilter}
-      ${depTypeFilter}
-      ${prereleaseFilter}
-      ${langFilter}
-    GROUP BY version_resolved, version_major, version_minor, version_patch, version_prerelease
-    ORDER BY version_major DESC, version_minor DESC, version_patch DESC
+      d.version_resolved,
+      d.version_major,
+      d.version_minor,
+      d.version_patch,
+      d.version_prerelease,
+      COUNT(DISTINCT d.project_id)::INTEGER AS project_count,
+      array_agg(DISTINCT d.project_id)     AS projects
+    FROM deps d
+    WHERE d.scan_month <= '${periodStr}'::DATE
+    GROUP BY d.version_resolved, d.version_major, d.version_minor, d.version_patch, d.version_prerelease
+    ORDER BY d.version_major DESC, d.version_minor DESC, d.version_patch DESC
     LIMIT 100
   `);
 }
@@ -379,20 +426,42 @@ async function toolQueryPrereleaseUsage(args: {
   `);
 }
 
+function applyProjectsLimit<T extends { projects?: string[] }>(
+  rows: T[],
+  limit?: number,
+): (T & { projects_truncated?: boolean })[] {
+  if (limit == null || limit < 1) return rows as (T & { projects_truncated?: boolean })[];
+  return rows.map((row) => {
+    const projects = row.projects;
+    if (!Array.isArray(projects) || projects.length <= limit) return row as T & { projects_truncated?: boolean };
+    return {
+      ...row,
+      projects: projects.slice(0, limit),
+      projects_truncated: true,
+    };
+  });
+}
+
 async function toolQueryDependencyAdoptionTrend(args: {
   package_name: string;
   language?: string;
   period_months?: number;
+  include_projects?: boolean;
+  projects_limit?: number;
 }): Promise<unknown> {
   const p = requireParquet('dependencies');
   const months = typeof args.period_months === 'number' ? args.period_months : 12;
+  const includeProjects = args.include_projects === true;
   const pkgFilter = `AND package_name = '${sqlStr(args.package_name)}'`;
   const langFilter = args.language
     ? `AND language = '${sqlStr(args.language)}'`
     : '';
+  const projectsSelect = includeProjects
+    ? ', array_agg(DISTINCT lpm.project_id) AS projects'
+    : '';
   // Carry-forward CTE: for each month in the window, count projects whose most recent scan
   // up to that month showed them depending on this package. Supports any npm or Python package.
-  return queryParquet(`
+  const rows = await queryParquet(`
     WITH
       months AS (
         SELECT date_trunc('month', current_date - INTERVAL (g) MONTH)::DATE AS period
@@ -428,6 +497,7 @@ async function toolQueryDependencyAdoptionTrend(args: {
     SELECT
       lpm.period::VARCHAR AS period,
       COUNT(DISTINCT lpm.project_id)::INTEGER AS adopting_projects
+      ${projectsSelect}
     FROM latest_per_project_month lpm
     JOIN adopters a
       ON a.project_id = lpm.project_id
@@ -435,6 +505,11 @@ async function toolQueryDependencyAdoptionTrend(args: {
     GROUP BY lpm.period
     ORDER BY lpm.period
   `);
+  if (!includeProjects) return rows;
+  return applyProjectsLimit(
+    rows as Array<{ period: string; adopting_projects: number; projects?: string[] }>,
+    args.projects_limit,
+  );
 }
 
 async function toolQueryToolingDistribution(args: {
@@ -482,6 +557,8 @@ async function toolQueryComponentUsage(args: {
   component_name: string;
   package_version?: number;
   include_prerelease?: boolean;
+  project_id?: string;
+  as_of_period?: string;
 }): Promise<unknown> {
   const p = requireParquet('component_usages');
   const pkgFilter = `AND package_name = '${sqlStr(args.package_name)}'`;
@@ -492,6 +569,14 @@ async function toolQueryComponentUsage(args: {
       : '';
   const prereleaseFilter =
     args.include_prerelease === true ? '' : `AND (package_version_is_prerelease = false OR package_version_is_prerelease IS NULL)`;
+  const projectFilter = args.project_id
+    ? `AND project_id = '${sqlStr(args.project_id)}'`
+    : '';
+  const asOfPeriod = args.as_of_period;
+  const periodFilter =
+    asOfPeriod != null && asOfPeriod !== ''
+      ? `AND date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE <= '${sqlStr(asOfPeriod)}'::DATE`
+      : '';
   return queryParquet(`
     SELECT
       project_id,
@@ -504,6 +589,8 @@ async function toolQueryComponentUsage(args: {
       ${compFilter}
       ${versionFilter}
       ${prereleaseFilter}
+      ${projectFilter}
+      ${periodFilter}
     ORDER BY project_id, file_path, line
     LIMIT 100
   `);
@@ -554,17 +641,23 @@ async function toolQueryComponentAdoptionTrend(args: {
   package_name: string;
   component_name?: string;
   period_months?: number;
+  include_projects?: boolean;
+  projects_limit?: number;
 }): Promise<unknown> {
   const p = requireParquet('component_usages');
   const months = typeof args.period_months === 'number' ? args.period_months : 12;
+  const includeProjects = args.include_projects === true;
   const pkgFilter = `AND package_name = '${sqlStr(args.package_name)}'`;
   const compFilter = args.component_name
     ? `AND component_name = '${sqlStr(args.component_name)}'`
     : '';
+  const projectsSelect = includeProjects
+    ? ', array_agg(DISTINCT lpm.project_id) AS projects'
+    : '';
   // Carry-forward CTE: for each month in the window, count projects whose most recent scan
   // up to that month showed them using the package. This ensures projects last scanned before
   // the window still contribute their last known state rather than being silently dropped.
-  return queryParquet(`
+  const rows = await queryParquet(`
     WITH
       months AS (
         SELECT date_trunc('month', current_date - INTERVAL (g) MONTH)::DATE AS period
@@ -600,6 +693,7 @@ async function toolQueryComponentAdoptionTrend(args: {
     SELECT
       lpm.period::VARCHAR AS period,
       COUNT(DISTINCT lpm.project_id)::INTEGER AS adopting_projects
+      ${projectsSelect}
     FROM latest_per_project_month lpm
     JOIN adopters a
       ON a.project_id = lpm.project_id
@@ -607,6 +701,11 @@ async function toolQueryComponentAdoptionTrend(args: {
     GROUP BY lpm.period
     ORDER BY lpm.period
   `);
+  if (!includeProjects) return rows;
+  return applyProjectsLimit(
+    rows as Array<{ period: string; adopting_projects: number; projects?: string[] }>,
+    args.projects_limit,
+  );
 }
 
 async function toolQueryExportUsage(args: {
@@ -614,6 +713,8 @@ async function toolQueryExportUsage(args: {
   export_name: string;
   package_version?: number;
   include_prerelease?: boolean;
+  project_id?: string;
+  as_of_period?: string;
 }): Promise<unknown> {
   const fp = requireParquet('function_usages');
   const fap = requireParquet('function_arg_usages');
@@ -625,6 +726,14 @@ async function toolQueryExportUsage(args: {
       : '';
   const prereleaseFilter =
     args.include_prerelease === true ? '' : `AND (fu.package_version_is_prerelease = false OR fu.package_version_is_prerelease IS NULL)`;
+  const projectFilter = args.project_id
+    ? `AND fu.project_id = '${sqlStr(args.project_id)}'`
+    : '';
+  const asOfPeriod = args.as_of_period;
+  const periodFilter =
+    asOfPeriod != null && asOfPeriod !== ''
+      ? `AND date_trunc('month', COALESCE(fu.code_at::VARCHAR, fu.scanned_at::VARCHAR)::TIMESTAMP)::DATE <= '${sqlStr(asOfPeriod)}'::DATE`
+      : '';
   return queryParquet(`
     SELECT
       fu.project_id,
@@ -647,6 +756,8 @@ async function toolQueryExportUsage(args: {
       ${expFilter}
       ${versionFilter}
       ${prereleaseFilter}
+      ${projectFilter}
+      ${periodFilter}
     ORDER BY fu.project_id, fu.file_path, fu.line, fau.arg_index
     LIMIT 100
   `);
@@ -656,15 +767,21 @@ async function toolQueryExportAdoptionTrend(args: {
   package_name: string;
   export_name: string;
   period_months?: number;
+  include_projects?: boolean;
+  projects_limit?: number;
 }): Promise<unknown> {
   const p = requireParquet('function_usages');
   const months = typeof args.period_months === 'number' ? args.period_months : 12;
+  const includeProjects = args.include_projects === true;
   const pkgFilter = `AND package_name = '${sqlStr(args.package_name)}'`;
   const expFilter = `AND export_name = '${sqlStr(args.export_name)}'`;
+  const projectsSelect = includeProjects
+    ? ', array_agg(DISTINCT lpm.project_id) AS projects'
+    : '';
   // Carry-forward CTE: for each month in the window, count projects whose most recent scan
   // up to that month showed them calling this export. This ensures projects last scanned before
   // the window still contribute their last known state rather than being silently dropped.
-  return queryParquet(`
+  const rows = await queryParquet(`
     WITH
       months AS (
         SELECT date_trunc('month', current_date - INTERVAL (g) MONTH)::DATE AS period
@@ -700,6 +817,7 @@ async function toolQueryExportAdoptionTrend(args: {
     SELECT
       lpm.period::VARCHAR AS period,
       COUNT(DISTINCT lpm.project_id)::INTEGER AS adopting_projects
+      ${projectsSelect}
     FROM latest_per_project_month lpm
     JOIN adopters a
       ON a.project_id = lpm.project_id
@@ -707,6 +825,11 @@ async function toolQueryExportAdoptionTrend(args: {
     GROUP BY lpm.period
     ORDER BY lpm.period
   `);
+  if (!includeProjects) return rows;
+  return applyProjectsLimit(
+    rows as Array<{ period: string; adopting_projects: number; projects?: string[] }>,
+    args.projects_limit,
+  );
 }
 
 // ─── CI template tools ────────────────────────────────────────────────────────
@@ -795,11 +918,17 @@ async function toolQueryCiTemplateInputs(args: {
 async function toolQueryCiTemplateAdoptionTrend(args: {
   source: string;
   period_months?: number;
+  include_projects?: boolean;
+  projects_limit?: number;
 }): Promise<unknown> {
   const p = requireParquet('ci_template_usages');
   const months = typeof args.period_months === 'number' ? args.period_months : 12;
+  const includeProjects = args.include_projects === true;
   const srcFilter = `AND source = '${sqlStr(args.source)}'`;
-  return queryParquet(`
+  const projectsSelect = includeProjects
+    ? ', array_agg(DISTINCT lpm.project_id) AS projects'
+    : '';
+  const rows = await queryParquet(`
     WITH
       months AS (
         SELECT date_trunc('month', current_date - INTERVAL (g) MONTH)::DATE AS period
@@ -831,6 +960,7 @@ async function toolQueryCiTemplateAdoptionTrend(args: {
     SELECT
       lpm.period::VARCHAR AS period,
       COUNT(DISTINCT lpm.project_id)::INTEGER AS adopting_projects
+      ${projectsSelect}
     FROM latest_per_project_month lpm
     JOIN adopters a
       ON a.project_id = lpm.project_id
@@ -838,6 +968,11 @@ async function toolQueryCiTemplateAdoptionTrend(args: {
     GROUP BY lpm.period
     ORDER BY lpm.period
   `);
+  if (!includeProjects) return rows;
+  return applyProjectsLimit(
+    rows as Array<{ period: string; adopting_projects: number; projects?: string[] }>,
+    args.projects_limit,
+  );
 }
 
 async function toolGetSourceContext(args: {
@@ -1056,9 +1191,10 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'get_project_snapshot',
-      description: 'Return the full latest snapshot for a project: tooling metadata and all its dependencies.',
+      description: 'Return the full latest snapshot for a project: tooling metadata and all its dependencies. Use as_of_period to get the project\'s state as of a past month; then diff with a call without it to see what changed. If as_of_period is set and the project had not been scanned on or before that month, snapshot and dependencies are null/empty.',
       schema: z.object({
         project_id: z.string().describe('Project slug (e.g. "my-org--my-repo")'),
+        as_of_period: z.string().optional().describe('ISO date (e.g. first day of month). If set, return snapshot only if the project had been scanned on or before that month; otherwise snapshot and dependencies are null/empty.'),
       }),
     },
     async (input) => wrap(await toolGetProjectSnapshot(input as Parameters<typeof toolGetProjectSnapshot>[0])),
@@ -1069,12 +1205,13 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_dependency_versions',
-      description: 'Show the distribution of resolved versions for a specific npm or Python package across all projects.',
+      description: 'Show the distribution of resolved versions for a specific npm or Python package across all projects. Use as_of_period to get version distribution and project list as of a past month (e.g. "2026-01-01"); you can then diff with current state to see new vs removed adopters.',
       schema: z.object({
         package_name: z.string().describe('Exact package name, e.g. "react" or "fastapi"'),
         dep_type: z.string().optional().describe('Filter by dependency section (optional)'),
         include_prerelease: z.boolean().optional().describe('Include prerelease versions (default: false)'),
         language: z.string().optional().describe('Filter to a specific language ecosystem: "javascript" or "python"'),
+        as_of_period: z.string().optional().describe('ISO date (e.g. first day of month). If set, return version distribution and project list as of that month (projects scanned on or before that month).'),
       }),
     },
     async (input) => wrap(await toolQueryDependencyVersions(input as Parameters<typeof toolQueryDependencyVersions>[0])),
@@ -1084,7 +1221,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
     {
       name: 'query_prerelease_usage',
       description: 'Find projects using prerelease (alpha/beta/rc) builds of an npm or Python package.',
-  schema: z.object({
+      schema: z.object({
         package_name: z.string().describe('Exact package name (npm or Python)'),
         prerelease_filter: z.string().optional().describe('Substring to match inside the prerelease tag (e.g. "beta", "acme")'),
       }),
@@ -1095,11 +1232,13 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_dependency_adoption_trend',
-      description: 'Show how many projects have a given package as a dependency over time, grouped by month. Works for both npm and Python packages (e.g. react, webpack, fastapi, mintel-logging). Each month reflects each project\'s last known state; projects not scanned within the window are carried forward. Returns an empty array if the package is not in the graph or has no scan data in the requested period. Counts in early months may be low if fewer projects were scanned then; interpret slopes with caution and use query_scan_coverage to compare with scan rollout.',
+      description: 'Show how many projects have a given package as a dependency over time, grouped by month. Works for both npm and Python packages (e.g. react, webpack, fastapi, mintel-logging). Each month reflects each project\'s last known state; projects not scanned within the window are carried forward. Set include_projects: true to get the list of project IDs per period so you can diff consecutive months for "new" vs "removed" adopters. Returns an empty array if the package is not in the graph or has no scan data in the requested period. Counts in early months may be low if fewer projects were scanned then; interpret slopes with caution and use query_scan_coverage to compare with scan rollout.',
       schema: z.object({
         package_name: z.string().describe('Exact package name, e.g. "react", "webpack", "fastapi"'),
         language: z.string().optional().describe('Filter to "javascript" or "python"'),
         period_months: z.number().int().min(1).optional().describe('How many months back to look (default: 12)'),
+        include_projects: z.boolean().optional().describe('If true, include the list of project IDs per period (same carry-forward semantics as the count). May increase payload size.'),
+        projects_limit: z.number().int().min(1).max(2000).optional().describe('When include_projects is true, cap the number of project IDs per period; if exceeded, projects_truncated is set.'),
       }),
     },
     async (input) => wrap(await toolQueryDependencyAdoptionTrend(input as Parameters<typeof toolQueryDependencyAdoptionTrend>[0])),
@@ -1122,12 +1261,14 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_component_usage',
-      description: 'Find all call sites where a React component from an npm package is used.',
+      description: 'Find all call sites where a React component from an npm package is used. Use project_id to restrict to one project and as_of_period to get call sites as of a past month; diff two calls to see which component usages were added or removed in that project.',
       schema: z.object({
         package_name: z.string().describe('npm package that exports the component'),
         component_name: z.string().describe('Component name, e.g. "Button"'),
         package_version: z.number().int().optional().describe('Filter to a specific major version'),
         include_prerelease: z.boolean().optional().describe('Include prerelease package versions (default: false)'),
+        project_id: z.string().optional().describe('If set, restrict results to this project.'),
+        as_of_period: z.string().optional().describe('ISO date (e.g. first day of month). If set, return call sites only if the project had been scanned on or before that month.'),
       }),
     },
     async (input) => wrap(await toolQueryComponentUsage(input as Parameters<typeof toolQueryComponentUsage>[0])),
@@ -1151,11 +1292,13 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_component_adoption_trend',
-      description: 'Show how many projects use JSX components from an npm package over time, grouped by month. Data comes from component_usages (JSX call sites only). For general dependency adoption (e.g. webpack, @playwright/test), use query_dependency_adoption_trend instead. Returns an empty array if the package has no component usage data in the graph or no scans in the requested period.',
+      description: 'Show how many projects use JSX components from an npm package over time, grouped by month. Data comes from component_usages (JSX call sites only). Set include_projects: true to get the list of project IDs per period for diffing "new" vs "removed" adopters. For general dependency adoption (e.g. webpack, @playwright/test), use query_dependency_adoption_trend instead. Returns an empty array if the package has no component usage data in the graph or no scans in the requested period.',
       schema: z.object({
         package_name: z.string().describe('npm package that exports the components'),
         component_name: z.string().optional().describe('Optional: filter to a specific component'),
         period_months: z.number().int().min(1).optional().describe('How many months back to look (default: 12)'),
+        include_projects: z.boolean().optional().describe('If true, include the list of project IDs per period (same carry-forward semantics as the count). May increase payload size.'),
+        projects_limit: z.number().int().min(1).max(2000).optional().describe('When include_projects is true, cap the number of project IDs per period; if exceeded, projects_truncated is set.'),
       }),
     },
     async (input) => wrap(await toolQueryComponentAdoptionTrend(input as Parameters<typeof toolQueryComponentAdoptionTrend>[0])),
@@ -1166,12 +1309,14 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_export_usage',
-      description: 'Find all call sites for a specific function or class export from an npm or Python package, including argument values.',
+      description: 'Find all call sites for a specific function or class export from an npm or Python package, including argument values. Use project_id to restrict to one project and as_of_period to get call sites as of a past month; diff two calls to see which export usages were added or removed in that project.',
       schema: z.object({
         package_name: z.string().describe('Package name (npm or Python) that exports the function, e.g. "fastapi" or "@acme/ui"'),
         export_name: z.string().describe('Exported function or class name, e.g. "FastAPI" or "createTheme"'),
         package_version: z.number().int().optional().describe('Filter to a specific major version'),
         include_prerelease: z.boolean().optional().describe('Include prerelease package versions'),
+        project_id: z.string().optional().describe('If set, restrict results to this project.'),
+        as_of_period: z.string().optional().describe('ISO date (e.g. first day of month). If set, return call sites only if the project had been scanned on or before that month.'),
       }),
     },
     async (input) => wrap(await toolQueryExportUsage(input as Parameters<typeof toolQueryExportUsage>[0])),
@@ -1180,11 +1325,13 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_export_adoption_trend',
-      description: 'Show how many projects call a specific function or class export over time, grouped by month. Works for both npm and Python packages. Each month reflects each project\'s last known state as of that month — projects not scanned within the window are carried forward from their most recent scan, so the count accurately represents adoption rather than scan activity.',
+      description: 'Show how many projects call a specific function or class export over time, grouped by month. Works for both npm and Python packages. Each month reflects each project\'s last known state as of that month — projects not scanned within the window are carried forward from their most recent scan, so the count accurately represents adoption rather than scan activity. Set include_projects: true to get the list of project IDs per period for diffing "new" vs "removed" adopters.',
       schema: z.object({
         package_name: z.string().describe('Package name (npm or Python), e.g. "fastapi" or "@acme/ui"'),
         export_name: z.string().describe('Exported function or class name'),
         period_months: z.number().int().min(1).optional().describe('How many months back to look (default: 12)'),
+        include_projects: z.boolean().optional().describe('If true, include the list of project IDs per period (same carry-forward semantics as the count). May increase payload size.'),
+        projects_limit: z.number().int().min(1).max(2000).optional().describe('When include_projects is true, cap the number of project IDs per period; if exceeded, projects_truncated is set.'),
       }),
     },
     async (input) => wrap(await toolQueryExportAdoptionTrend(input as Parameters<typeof toolQueryExportAdoptionTrend>[0])),
@@ -1246,10 +1393,12 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_ci_template_adoption_trend',
-      description: 'Show how many projects adopted a CI template over time, grouped by month. Uses carry-forward logic so projects not scanned recently still contribute their last known state.',
+      description: 'Show how many projects adopted a CI template over time, grouped by month. Uses carry-forward logic so projects not scanned recently still contribute their last known state. Set include_projects: true to get the list of project IDs per period for diffing "new" vs "removed" adopters.',
       schema: z.object({
         source: z.string().describe('Template source identifier, e.g. "actions/checkout"'),
         period_months: z.number().int().min(1).optional().describe('How many months back to look (default: 12)'),
+        include_projects: z.boolean().optional().describe('If true, include the list of project IDs per period (same carry-forward semantics as the count). May increase payload size.'),
+        projects_limit: z.number().int().min(1).max(2000).optional().describe('When include_projects is true, cap the number of project IDs per period; if exceeded, projects_truncated is set.'),
       }),
     },
     async (input) => wrap(await toolQueryCiTemplateAdoptionTrend(input as Parameters<typeof toolQueryCiTemplateAdoptionTrend>[0])),

@@ -188,19 +188,19 @@ Options:
 | Discovery    | `query_scan_coverage`           | Project count scanned per month (for interpreting adoption trends) |
 | Discovery    | `list_projects`                  | Filtered list of scanned projects with tooling info     |
 | Discovery    | `list_packages`                  | All packages tracked across projects (use `scope` / `name_prefix` for internal) |
-| Discovery    | `get_project_snapshot`           | Full tooling and dependency detail for one project      |
-| Dependencies | `query_dependency_versions`      | Version distribution for a given package across orgs   |
-| Dependencies | `query_dependency_adoption_trend` | Dependency adoption over time (JS and Python)          |
+| Discovery    | `get_project_snapshot`           | Full tooling and dependency detail for one project; optional `as_of_period` for point-in-time state |
+| Dependencies | `query_dependency_versions`      | Version distribution for a package; optional `as_of_period` for point-in-time state |
+| Dependencies | `query_dependency_adoption_trend` | Dependency adoption over time (JS and Python); optional `include_projects` for project IDs per period |
 | Dependencies | `query_prerelease_usage`         | Which projects use prerelease (`alpha`/`beta`/`rc`) deps |
 | Dependencies | `query_tooling_distribution`     | Breakdown of a tooling category (e.g. test frameworks)  |
-| Components   | `query_component_usage`          | Where a JSX component is used across projects           |
+| Components   | `query_component_usage`          | Where a JSX component is used; optional `project_id` and `as_of_period` for per-project diffing |
 | Components   | `query_prop_usage`               | Prop values for a component across all call sites       |
-| Components   | `query_component_adoption_trend` | Component adoption over time (scan history)             |
-| Functions    | `query_export_usage`             | Where a function export is called across projects       |
-| Functions    | `query_export_adoption_trend`    | Export adoption over time                               |
+| Components   | `query_component_adoption_trend` | Component adoption over time; optional `include_projects` for project IDs per period |
+| Functions    | `query_export_usage`             | Where a function export is called; optional `project_id` and `as_of_period` for per-project diffing |
+| Functions    | `query_export_adoption_trend`    | Export adoption over time; optional `include_projects` for project IDs per period   |
 | Functions    | `get_source_context`             | Source snippet for a specific prop or arg call site     |
 
-Adoption trends (`query_dependency_adoption_trend`) work for both JavaScript and Python packages. Use `query_scan_coverage` to compare with scan rollout when interpreting trend slopes.
+Adoption trends (`query_dependency_adoption_trend`) work for both JavaScript and Python packages. Use `query_scan_coverage` to compare with scan rollout when interpreting trend slopes. To list adopters at a point in time or compute "new" vs "removed" between periods, use `include_projects: true` on adoption trend tools (and optionally `projects_limit` to cap list size), or use `as_of_period` on `query_dependency_versions` to get version distribution and project list as of a given month. For per-project "what changed?" use `get_project_snapshot` with `as_of_period` and diff with latest, or use `query_component_usage` / `query_export_usage` with `project_id` and optional `as_of_period` to diff call sites in a project over time.
 
 **Wiring into Claude Desktop:**
 

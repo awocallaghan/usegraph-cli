@@ -253,6 +253,66 @@ test('query_export_usage: formatDate is called in multiple projects', async () =
   );
 });
 
+test('get_project_snapshot: returns snapshot and deps; as_of_period next month returns same shape', async () => {
+  const listRows = await callTool('list_projects', {});
+  assert.ok(listRows.length >= 1, 'Need at least one project');
+  const projectId = listRows[0].project_id;
+
+  const current = await callTool('get_project_snapshot', { project_id: projectId });
+  assert.ok('snapshot' in current && 'dependencies' in current, 'result must have snapshot and dependencies');
+  assert.ok(current.snapshot != null, 'current snapshot should be non-null for scanned project');
+  assert.ok(Array.isArray(current.dependencies), 'dependencies must be array');
+
+  const nextMonth = new Date();
+  nextMonth.setMonth(nextMonth.getMonth() + 1);
+  const period = nextMonth.toISOString().slice(0, 7) + '-01';
+  const asOf = await callTool('get_project_snapshot', { project_id: projectId, as_of_period: period });
+  assert.ok('snapshot' in asOf && 'dependencies' in asOf, 'as_of result must have snapshot and dependencies');
+  assert.ok(asOf.snapshot != null, 'as_of next month should return current snapshot (project scanned by then)');
+});
+
+test('query_component_usage: project_id restricts to one project', async () => {
+  const allRows = await callTool('query_component_usage', {
+    package_name: '@acme/ui',
+    component_name: 'Button',
+  });
+  assert.ok(allRows.length >= 1, 'Need at least one Button usage');
+  const projectId = allRows[0].project_id;
+
+  const rows = await callTool('query_component_usage', {
+    package_name: '@acme/ui',
+    component_name: 'Button',
+    project_id: projectId,
+  });
+  assert.ok(Array.isArray(rows), 'result must be array');
+  for (const row of rows) {
+    assert.strictEqual(row.project_id, projectId, `every row must have project_id ${projectId}`);
+  }
+});
+
+test('query_component_usage: project_id and as_of_period returns same shape', async () => {
+  const allRows = await callTool('query_component_usage', {
+    package_name: '@acme/ui',
+    component_name: 'Button',
+  });
+  assert.ok(allRows.length >= 1, 'Need at least one Button usage');
+  const projectId = allRows[0].project_id;
+  const nextMonth = new Date();
+  nextMonth.setMonth(nextMonth.getMonth() + 1);
+  const period = nextMonth.toISOString().slice(0, 7) + '-01';
+
+  const rows = await callTool('query_component_usage', {
+    package_name: '@acme/ui',
+    component_name: 'Button',
+    project_id: projectId,
+    as_of_period: period,
+  });
+  assert.ok(Array.isArray(rows), 'result must be array');
+  for (const row of rows) {
+    assert.ok('project_id' in row && 'file_path' in row && 'line' in row, 'each row must have project_id, file_path, line');
+  }
+});
+
 test('query_tooling_distribution: test_framework includes jest and vitest', async () => {
   const result = await callTool('query_tooling_distribution', {
     category: 'test_framework',
@@ -286,6 +346,60 @@ test('query_dependency_versions: react 18.2.0 is present', async () => {
     'number',
     `version_major should be a number, not ${typeof react18.version_major}`,
   );
+});
+
+test('query_dependency_versions: as_of_period returns same shape (version dist as of month)', async () => {
+  // Use a recent ISO month; fixtures are scanned "now" so current or recent month should include projects.
+  const asOf = new Date();
+  asOf.setMonth(asOf.getMonth() - 1);
+  const period = asOf.toISOString().slice(0, 7) + '-01'; // e.g. 2026-02-01
+  const rows = await callTool('query_dependency_versions', {
+    package_name: 'react',
+    as_of_period: period,
+  });
+  assert.ok(Array.isArray(rows), 'result should be an array');
+  for (const row of rows) {
+    assert.ok('version_resolved' in row && 'project_count' in row && 'projects' in row,
+      `each row should have version_resolved, project_count, projects; got keys: ${Object.keys(row).join(', ')}`);
+    assert.ok(Array.isArray(row.projects), 'projects should be an array');
+  }
+});
+
+test('query_dependency_adoption_trend: include_projects adds projects array per period', async () => {
+  const rows = await callTool('query_dependency_adoption_trend', {
+    package_name: 'react',
+    period_months: 3,
+    include_projects: true,
+  });
+  assert.ok(rows.length >= 1, `Expected at least 1 trend row, got ${rows.length}`);
+  for (const row of rows) {
+    assert.ok(typeof row.period === 'string', `period should be a string, got ${typeof row.period}`);
+    assert.ok(typeof row.adopting_projects === 'number', `adopting_projects should be a number, got ${typeof row.adopting_projects}`);
+    assert.ok(Array.isArray(row.projects), `each row should have projects array when include_projects: true, got ${typeof row.projects}`);
+    assert.ok(
+      row.projects.length <= row.adopting_projects,
+      `projects.length (${row.projects.length}) should be <= adopting_projects (${row.adopting_projects})`,
+    );
+  }
+});
+
+test('query_dependency_adoption_trend: projects_limit caps list and sets projects_truncated', async () => {
+  const rows = await callTool('query_dependency_adoption_trend', {
+    package_name: 'react',
+    period_months: 3,
+    include_projects: true,
+    projects_limit: 2,
+  });
+  assert.ok(rows.length >= 1, `Expected at least 1 trend row, got ${rows.length}`);
+  const withTruncation = rows.filter((r) => r.projects_truncated === true);
+  // If any period has more than 2 adopters, we should see truncation
+  const hasManyAdopters = rows.some((r) => r.adopting_projects > 2);
+  if (hasManyAdopters) {
+    assert.ok(withTruncation.length >= 1, 'expected at least one row with projects_truncated when adopters > limit');
+  }
+  for (const row of rows) {
+    assert.ok(row.projects.length <= 2, `projects should be capped at 2, got ${row.projects.length}`);
+  }
 });
 
 test('get_scan_metadata: project_count is 15', async () => {
