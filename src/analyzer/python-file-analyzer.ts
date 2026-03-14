@@ -1,20 +1,22 @@
 /**
- * Python source file analyzer.
+ * Python source file analyzer — tree-sitter based.
  *
  * Extracts import declarations and usages of tracked packages from `.py`
- * files using a regex-based parser (no Python runtime required).
+ * files using the tree-sitter parser for correctness and robustness.
  *
  * Handles:
  *  - Named imports:     from fastapi import FastAPI, HTTPException
  *  - Aliased imports:   from fastapi import FastAPI as App
  *  - Namespace imports: import pandas as pd
  *  - Module imports:    import os.path  (top-level package = os)
+ *  - Multi-line imports: parenthesised and backslash-continued
  *  - Function calls:    Flask(__name__)
  *  - Namespace calls:   pd.DataFrame(data)
- *  - Method chains:     router.get("/")
+ *  - Named-import-as-namespace: from django.db import models → models.CharField()
  */
 import { readFile } from 'fs/promises';
 import { relative } from 'path';
+import { createRequire } from 'module';
 import type {
   FileAnalysis,
   ImportInfo,
@@ -22,6 +24,33 @@ import type {
   FunctionCallInfo,
   ArgInfo,
 } from '../types.js';
+
+// tree-sitter is a native CJS module — load via createRequire from ESM
+const _require = createRequire(import.meta.url);
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+const Parser = _require('tree-sitter');
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+const Python = _require('tree-sitter-python');
+
+// Singleton parser instance (Parser.parse() is synchronous and not thread-safe,
+// but Node.js is single-threaded so a module-level instance is safe).
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
+const _parser = new Parser();
+// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+_parser.setLanguage(Python);
+
+// ─── Minimal tree-sitter type helpers ────────────────────────────────────────
+
+interface TSNode {
+  type: string;
+  text: string;
+  startPosition: { row: number; column: number };
+  endPosition: { row: number; column: number };
+  children: TSNode[];
+  namedChildren: TSNode[];
+  childForFieldName(name: string): TSNode | null;
+  childrenForFieldName(name: string): TSNode[];
+}
 
 // ─── Internal import tracking ─────────────────────────────────────────────────
 
@@ -36,255 +65,340 @@ interface NameEntry {
 type ImportMap = Map<string, NameEntry>;   // localName → entry
 type NamespaceMap = Map<string, string>;   // localAlias → packageSource
 
-// ─── Regex patterns ───────────────────────────────────────────────────────────
+// ─── Stdlib filter ────────────────────────────────────────────────────────────
 
-// Match: import X, import X.Y, import X as Y, import X.Y as Z
-const SIMPLE_IMPORT_RE = /^[ \t]*import\s+([\w.]+)(?:\s+as\s+(\w+))?[ \t]*(?:#.*)?$/gm;
+const STDLIB_MODULES = new Set([
+  'abc', 'ast', 'asyncio', 'base64', 'builtins', 'collections', 'contextlib',
+  'copy', 'csv', 'dataclasses', 'datetime', 'decimal', 'email', 'enum',
+  'errno', 'functools', 'gc', 'glob', 'graphlib', 'hashlib', 'http', 'importlib',
+  'inspect', 'io', 'itertools', 'json', 'logging', 'math', 'multiprocessing',
+  'operator', 'os', 'pathlib', 'pickle', 'platform', 'pprint', 'queue',
+  're', 'shutil', 'signal', 'socket', 'sqlite3', 'ssl', 'stat', 'string',
+  'struct', 'subprocess', 'sys', 'tempfile', 'textwrap', 'threading', 'time',
+  'tomllib', 'traceback', 'types', 'typing', 'unicodedata', 'unittest', 'urllib',
+  'uuid', 'warnings', 'weakref', 'xml', 'xmlrpc', 'zipfile', 'zoneinfo',
+  '__future__',
+]);
 
-// Match: from X import Y  or  from X import Y, Z  or  from X import (Y, Z)
-// The import list is captured as a raw string (may span to next line for parenthesised form;
-// we only handle single-line for now — covers the vast majority of real-world usage).
-const FROM_IMPORT_RE = /^[ \t]*from\s+([\w.]+)\s+import\s+([^\\#\n]+)/gm;
-
-// Match individual names in the import list: Name or Name as alias
-const NAME_ALIAS_RE = /(\w+)(?:\s+as\s+(\w+))?/g;
-
-// ─── Source pre-processing ─────────────────────────────────────────────────────
-
-/**
- * Normalise multi-line imports onto a single line so that FROM_IMPORT_RE can
- * match them without needing to span newlines.  Handles two forms:
- *
- *   Parenthesised:
- *     from fastapi import (    →   from fastapi import FastAPI, HTTPException
- *         FastAPI,
- *         HTTPException,
- *     )
- *
- *   Backslash-continued:
- *     from fastapi import FastAPI, \    →   from fastapi import FastAPI, HTTPException
- *         HTTPException
- */
-function normalizeMultiLineImports(source: string): string {
-  // 1. Join backslash-continued lines: `\\\n` → ' '
-  let result = source.replace(/\\\n[ \t]*/g, ' ');
-
-  // 2. Flatten parenthesised import blocks
-  result = result.replace(
-    /^([ \t]*from\s+[\w.]+\s+import\s*)\(\s*\n([\s\S]*?)\)/gm,
-    (_, prefix: string, body: string) => {
-      const names = body
-        .split('\n')
-        .map((l: string) => l.replace(/#.*$/, '').trim().replace(/,\s*$/, ''))
-        .filter((l: string) => l.length > 0)
-        .join(', ');
-      return `${prefix}${names}`;
-    },
-  );
-
-  return result;
-}
-
-// Match function/class calls: Identifier(  or  identifier.Identifier(
-// We capture line positions by scanning the source line-by-line.
-const CALL_RE = /\b([\w]+)\s*\(/g;
-const MEMBER_CALL_RE = /\b([\w]+)\.([\w]+)\s*\(/g;
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Extract the top-level package name from a dotted module path. */
 function topLevelPackage(modulePath: string): string {
   return modulePath.split('.')[0];
 }
 
-/** Check whether a module path refers to an external (third-party) package. */
 function isExternalModule(modulePath: string): boolean {
-  // Skip relative imports (from . import foo, from .. import foo)
   if (modulePath.startsWith('.')) return false;
-  // Skip well-known stdlib top-level names (non-exhaustive but covers the most common)
-  const stdlib = new Set([
-    'abc', 'ast', 'asyncio', 'base64', 'builtins', 'collections', 'contextlib',
-    'copy', 'csv', 'dataclasses', 'datetime', 'decimal', 'email', 'enum',
-    'errno', 'functools', 'gc', 'glob', 'hashlib', 'http', 'importlib',
-    'inspect', 'io', 'itertools', 'json', 'logging', 'math', 'multiprocessing',
-    'operator', 'os', 'pathlib', 'pickle', 'platform', 'pprint', 'queue',
-    're', 'shutil', 'signal', 'socket', 'sqlite3', 'ssl', 'stat', 'string',
-    'struct', 'subprocess', 'sys', 'tempfile', 'textwrap', 'threading', 'time',
-    'traceback', 'types', 'typing', 'unicodedata', 'unittest', 'urllib',
-    'uuid', 'warnings', 'weakref', 'xml', 'xmlrpc', 'zipfile',
-    // Python 3 extras
-    'zoneinfo', 'tomllib', 'graphlib',
-    // Private/internal convention
-    '__future__',
-  ]);
-  return !stdlib.has(topLevelPackage(modulePath));
+  return !STDLIB_MODULES.has(topLevelPackage(modulePath));
 }
 
-/** Check whether the given package name is in the set of target packages. */
-function isTarget(packageName: string, targets: Set<string>): boolean {
-  return targets.has(packageName);
+// ─── String value extraction ──────────────────────────────────────────────────
+
+/** Extract the value of a tree-sitter `string` node (strips quotes/prefix). */
+function extractStringValue(node: TSNode): string {
+  // Find the string_content child (may not exist for empty strings)
+  const contentNode = node.namedChildren.find((c) => c.type === 'string_content');
+  return contentNode ? contentNode.text : '';
 }
 
-/**
- * Build a map from line index (0-based) to character offset where the line starts.
- * Used to convert absolute character offsets to line/column numbers.
- */
-function buildLineStarts(source: string): number[] {
-  const starts = [0];
-  for (let i = 0; i < source.length; i++) {
-    if (source[i] === '\n') starts.push(i + 1);
-  }
-  return starts;
-}
+// ─── Source snippet helper ────────────────────────────────────────────────────
 
-/** Convert an absolute character offset to 1-based line/col. */
-function offsetToLineCol(offset: number, lineStarts: number[]): { line: number; col: number } {
-  let lo = 0;
-  let hi = lineStarts.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (lineStarts[mid] <= offset) lo = mid;
-    else hi = mid - 1;
-  }
-  return { line: lo + 1, col: offset - lineStarts[lo] + 1 };
-}
-
-/** Extract ~5 lines of context centred around a 1-based line number. */
-function extractSnippet(sourceLines: string[], line: number): string {
-  const start = Math.max(0, line - 2);
-  const end = Math.min(sourceLines.length, line + 3);
+function extractSnippet(sourceLines: string[], oneBased: number): string {
+  const start = Math.max(0, oneBased - 2);
+  const end = Math.min(sourceLines.length, oneBased + 3);
   return sourceLines.slice(start, end).join('\n');
 }
 
+// ─── Argument parsing ─────────────────────────────────────────────────────────
+
+function parseArgNode(argNode: TSNode, index: number, sourceLines: string[]): ArgInfo {
+  const line = argNode.startPosition.row + 1; // 1-based
+
+  switch (argNode.type) {
+    case 'string':
+      return { index, type: 'string', value: extractStringValue(argNode), isSpread: false, sourceSnippet: null };
+
+    case 'integer': {
+      const v = Number(argNode.text);
+      return { index, type: 'number', value: isNaN(v) ? 0 : v, isSpread: false, sourceSnippet: null };
+    }
+
+    case 'float': {
+      const v = Number(argNode.text);
+      return { index, type: 'number', value: isNaN(v) ? 0 : v, isSpread: false, sourceSnippet: null };
+    }
+
+    case 'true':
+      return { index, type: 'boolean', value: true, isSpread: false, sourceSnippet: null };
+
+    case 'false':
+      return { index, type: 'boolean', value: false, isSpread: false, sourceSnippet: null };
+
+    case 'none':
+      return { index, type: 'null', isSpread: false, sourceSnippet: null };
+
+    case 'list_splat':
+    case 'dictionary_splat':
+      return { index, type: 'spread', isSpread: true, sourceSnippet: null };
+
+    default: {
+      const snippet = extractSnippet(sourceLines, line);
+      return { index, type: 'expression', isSpread: false, sourceSnippet: snippet };
+    }
+  }
+}
+
 /**
- * Parse a Python argument list string (the text inside the outermost parens)
- * into a list of ArgInfo entries.
- *
- * This is intentionally simple — we only recognise static literals and
- * mark everything else as 'expression'.  Nested parens/brackets are handled
- * by counting depth so we split on top-level commas only.
+ * Parse an `argument_list` tree-sitter node into ArgInfo[].
+ * Keyword arguments are unwrapped to their value; positional args are used directly.
  */
-function parseArgs(argsText: string, line: number, sourceLines: string[]): ArgInfo[] {
-  const parts = splitTopLevel(argsText);
+function parseArgList(argListNode: TSNode, sourceLines: string[]): ArgInfo[] {
   const args: ArgInfo[] = [];
+  let index = 0;
 
-  for (let i = 0; i < parts.length; i++) {
-    let raw = parts[i].trim();
-    if (!raw) continue;
-
-    // Strip keyword argument prefix: `name=value` → `value`
-    // But don't strip if it's a comparison expression (rare in call sites)
-    const kwMatch = raw.match(/^\w+\s*=\s*(?!=)/);
-    if (kwMatch) raw = raw.slice(kwMatch[0].length).trim();
-
-    // Spread (*args, **kwargs)
-    if (raw.startsWith('*')) {
-      args.push({ index: i, type: 'spread', isSpread: true, sourceSnippet: null });
-      continue;
+  for (const child of argListNode.namedChildren) {
+    if (child.type === 'keyword_argument') {
+      const valueNode = child.childForFieldName('value');
+      if (valueNode) {
+        args.push(parseArgNode(valueNode, index, sourceLines));
+        index++;
+      }
+    } else if (child.type === 'comment') {
+      // skip
+    } else {
+      args.push(parseArgNode(child, index, sourceLines));
+      index++;
     }
-
-    // String literal  (single- or double-quoted, including triple-quoted start)
-    const strMatch = raw.match(/^(?:f?r?b?|b?r?f?)(['"])(.*)\1$/s);
-    if (strMatch) {
-      args.push({ index: i, type: 'string', value: strMatch[2], isSpread: false, sourceSnippet: null });
-      continue;
-    }
-
-    // Integer or float literal
-    const numMatch = raw.match(/^-?\d+(?:\.\d+)?$/);
-    if (numMatch) {
-      args.push({ index: i, type: 'number', value: Number(raw), isSpread: false, sourceSnippet: null });
-      continue;
-    }
-
-    // Boolean / None
-    if (raw === 'True') { args.push({ index: i, type: 'boolean', value: true, isSpread: false, sourceSnippet: null }); continue; }
-    if (raw === 'False') { args.push({ index: i, type: 'boolean', value: false, isSpread: false, sourceSnippet: null }); continue; }
-    if (raw === 'None') { args.push({ index: i, type: 'null', isSpread: false, sourceSnippet: null }); continue; }
-
-    // Everything else: dynamic expression
-    const snippet = extractSnippet(sourceLines, line);
-    args.push({ index: i, type: 'expression', isSpread: false, sourceSnippet: snippet });
   }
 
   return args;
 }
 
-/**
- * Split a string on top-level commas (ignoring commas inside brackets/parens/strings).
- */
-function splitTopLevel(text: string): string[] {
-  const result: string[] = [];
-  let depth = 0;
-  let inStr: string | null = null;
-  let start = 0;
+// ─── Import collection pass ────────────────────────────────────────────────────
 
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-
-    if (inStr) {
-      if (ch === '\\') { i++; continue; }
-      if (ch === inStr) inStr = null;
-      continue;
+function collectImports(
+  rootNode: TSNode,
+  imports: ImportInfo[],
+  importMap: ImportMap,
+  namespaceMap: NamespaceMap,
+): void {
+  for (const stmt of rootNode.children) {
+    if (stmt.type === 'import_from_statement') {
+      collectFromImport(stmt, imports, importMap, namespaceMap);
+    } else if (stmt.type === 'import_statement') {
+      collectSimpleImport(stmt, imports, importMap, namespaceMap);
     }
-
-    if (ch === '"' || ch === "'") { inStr = ch; continue; }
-    if (ch === '(' || ch === '[' || ch === '{') { depth++; continue; }
-    if (ch === ')' || ch === ']' || ch === '}') { depth--; continue; }
-
-    if (ch === ',' && depth === 0) {
-      result.push(text.slice(start, i));
-      start = i + 1;
-    }
+    // We only look at top-level statements for imports (standard Python practice)
   }
-
-  result.push(text.slice(start));
-  return result;
 }
 
-/**
- * Given a source string and a position just after `(`, scan forward to find
- * the matching `)`, respecting nesting, strings, and comments.
- * Returns the text inside the parens (or null if not found within a reasonable limit).
- */
-function extractArgText(source: string, openParenPos: number): string | null {
-  let depth = 1;
-  let inStr: string | null = null;
-  const LIMIT = 2000; // bail out for very long argument lists
+function collectFromImport(
+  node: TSNode,
+  imports: ImportInfo[],
+  importMap: ImportMap,
+  namespaceMap: NamespaceMap,
+): void {
+  const moduleNameNode = node.childForFieldName('module_name');
+  if (!moduleNameNode) return;
+  const modulePath = moduleNameNode.text;
+  if (!isExternalModule(modulePath)) return;
 
-  for (let i = openParenPos; i < Math.min(source.length, openParenPos + LIMIT); i++) {
-    const ch = source[i];
+  const pkg = topLevelPackage(modulePath);
+  const nameNodes = node.childrenForFieldName('name');
+  const specifiers: ImportSpecifierInfo[] = [];
 
-    if (inStr) {
-      if (ch === '\\') { i++; continue; }
-      if (ch === inStr) inStr = null;
+  for (const nameNode of nameNodes) {
+    if (nameNode.type === 'wildcard_import') {
+      // `from X import *` — skip
       continue;
     }
 
-    if (ch === '#') {
-      // Skip to end of line
-      while (i < source.length && source[i] !== '\n') i++;
-      continue;
+    let imported: string;
+    let local: string;
+
+    if (nameNode.type === 'aliased_import') {
+      const nameField = nameNode.childForFieldName('name');
+      const aliasField = nameNode.childForFieldName('alias');
+      imported = nameField ? nameField.text : nameNode.text;
+      local = aliasField ? aliasField.text : imported;
+    } else {
+      // dotted_name
+      imported = nameNode.text;
+      local = imported;
     }
 
-    if (ch === '"' || ch === "'") { inStr = ch; continue; }
-    if (ch === '(') { depth++; continue; }
-    if (ch === ')') {
-      depth--;
-      if (depth === 0) return source.slice(openParenPos, i);
-    }
+    const specifier: ImportSpecifierInfo = { local, imported, type: 'named' };
+    specifiers.push(specifier);
+    importMap.set(local, { source: pkg, imported, type: 'named' });
+    // Also register as namespace so `models.Field()` style calls work
+    namespaceMap.set(local, pkg);
   }
 
-  return null;
+  if (specifiers.length === 0) return;
+
+  const existing = imports.find((i) => i.source === pkg);
+  if (existing) {
+    for (const s of specifiers) existing.specifiers.push(s);
+  } else {
+    imports.push({ source: pkg, specifiers, typeOnly: false });
+  }
+}
+
+function collectSimpleImport(
+  node: TSNode,
+  imports: ImportInfo[],
+  importMap: ImportMap,
+  namespaceMap: NamespaceMap,
+): void {
+  const nameNodes = node.childrenForFieldName('name');
+
+  for (const nameNode of nameNodes) {
+    let modulePath: string;
+    let local: string;
+
+    if (nameNode.type === 'aliased_import') {
+      const nameField = nameNode.childForFieldName('name');
+      const aliasField = nameNode.childForFieldName('alias');
+      modulePath = nameField ? nameField.text : nameNode.text;
+      local = aliasField ? aliasField.text : modulePath;
+    } else {
+      modulePath = nameNode.text;
+      local = modulePath;
+    }
+
+    if (!isExternalModule(modulePath)) continue;
+
+    const pkg = topLevelPackage(modulePath);
+    namespaceMap.set(local, pkg);
+    importMap.set(local, { source: pkg, imported: modulePath, type: 'namespace' });
+
+    const specifier: ImportSpecifierInfo = { local, imported: modulePath, type: 'namespace' };
+    const existing = imports.find((i) => i.source === pkg);
+    if (existing) {
+      existing.specifiers.push(specifier);
+    } else {
+      imports.push({ source: pkg, specifiers: [specifier], typeOnly: false });
+    }
+  }
+}
+
+// ─── Call collection pass ─────────────────────────────────────────────────────
+
+function collectCalls(
+  node: TSNode,
+  functionCalls: FunctionCallInfo[],
+  importMap: ImportMap,
+  namespaceMap: NamespaceMap,
+  targetPackages: Set<string>,
+  filePath: string,
+  sourceLines: string[],
+): void {
+  if (node.type === 'call') {
+    processCandidateCall(node, functionCalls, importMap, namespaceMap, targetPackages, filePath, sourceLines);
+  }
+
+  for (const child of node.children) {
+    collectCalls(child, functionCalls, importMap, namespaceMap, targetPackages, filePath, sourceLines);
+  }
+}
+
+function processCandidateCall(
+  callNode: TSNode,
+  functionCalls: FunctionCallInfo[],
+  importMap: ImportMap,
+  namespaceMap: NamespaceMap,
+  targetPackages: Set<string>,
+  filePath: string,
+  sourceLines: string[],
+): void {
+  const funcNode = callNode.childForFieldName('function');
+  if (!funcNode) return;
+
+  let packageSource: string | null = null;
+  let functionName: string;
+
+  if (funcNode.type === 'identifier') {
+    const localName = funcNode.text;
+    const entry = importMap.get(localName);
+    if (!entry || !targetPackages.has(entry.source)) return;
+    packageSource = entry.source;
+    functionName = localName;
+  } else if (funcNode.type === 'attribute') {
+    const objectNode = funcNode.childForFieldName('object');
+    const attrNode = funcNode.childForFieldName('attribute');
+    if (!objectNode || !attrNode) return;
+
+    // Only handle single-level namespace: `alias.method(`
+    // Deeper chains (a.b.c) are not tracked
+    if (objectNode.type !== 'identifier') return;
+
+    const prefix = objectNode.text;
+    const method = attrNode.text;
+    const aliasSource = namespaceMap.get(prefix);
+    if (!aliasSource || !targetPackages.has(aliasSource)) return;
+    packageSource = aliasSource;
+    functionName = `${prefix}.${method}`;
+  } else {
+    return;
+  }
+
+  const line = callNode.startPosition.row + 1; // 1-based
+  const column = callNode.startPosition.column + 1;
+
+  const argListNode = callNode.childForFieldName('arguments');
+  const args = argListNode ? parseArgList(argListNode, sourceLines) : [];
+
+  const callInfo: FunctionCallInfo = {
+    file: filePath,
+    line,
+    column,
+    functionName,
+    importedFrom: packageSource,
+    args,
+    packageVersionResolved: null,
+    packageVersionMajor: null,
+    packageVersionMinor: null,
+    packageVersionPatch: null,
+    packageVersionPrerelease: null,
+    packageVersionIsPrerelease: null,
+  };
+
+  functionCalls.push(callInfo);
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+export interface PythonExtractionResult {
+  imports: ImportInfo[];
+  componentUsages: never[];
+  functionCalls: FunctionCallInfo[];
+}
+
+export function extractFromPythonSource(
+  source: string,
+  filePath: string,
+  targetPackages: Set<string>,
+): PythonExtractionResult {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+  const tree = _parser.parse(source) as { rootNode: TSNode };
+  const rootNode = tree.rootNode;
+
+  const imports: ImportInfo[] = [];
+  const functionCalls: FunctionCallInfo[] = [];
+  const importMap: ImportMap = new Map();
+  const namespaceMap: NamespaceMap = new Map();
+  const sourceLines = source.split('\n');
+
+  // Pass 1: collect imports
+  collectImports(rootNode, imports, importMap, namespaceMap);
+
+  // Pass 2: collect function/class calls referencing tracked packages
+  if (targetPackages.size > 0) {
+    collectCalls(rootNode, functionCalls, importMap, namespaceMap, targetPackages, filePath, sourceLines);
+  }
+
+  return { imports, componentUsages: [], functionCalls };
+}
+
 /**
  * Analyse a single Python source file and return a FileAnalysis.
- *
- * Targets packages listed in `targetPackages`; only function calls that
- * originate from those packages are recorded as `functionCalls`.
  */
 export async function analyzePythonFile(
   filePath: string,
@@ -309,205 +423,4 @@ export async function analyzePythonFile(
     errors.push(`Parse error: ${String(err)}`);
     return { filePath, relativePath, imports: [], componentUsages: [], functionCalls: [], errors };
   }
-}
-
-// ─── Core extraction logic ────────────────────────────────────────────────────
-
-export interface PythonExtractionResult {
-  imports: ImportInfo[];
-  componentUsages: never[];
-  functionCalls: FunctionCallInfo[];
-}
-
-export function extractFromPythonSource(
-  source: string,
-  filePath: string,
-  targetPackages: Set<string>,
-): PythonExtractionResult {
-  const imports: ImportInfo[] = [];
-  const functionCalls: FunctionCallInfo[] = [];
-
-  const importMap: ImportMap = new Map();
-  const namespaceMap: NamespaceMap = new Map();
-
-  // Normalise multi-line parenthesised imports before regex scanning.
-  // We keep the original source for line/column calculations and snippets
-  // so that reported positions stay accurate.
-  const normalizedSource = normalizeMultiLineImports(source);
-
-  const lineStarts = buildLineStarts(source);
-  const sourceLines = source.split('\n');
-
-  // ── Pass 1: collect imports ────────────────────────────────────────────────
-
-  // a) `import X` / `import X.Y` / `import X as alias`
-  {
-    let m: RegExpExecArray | null;
-    SIMPLE_IMPORT_RE.lastIndex = 0;
-    while ((m = SIMPLE_IMPORT_RE.exec(normalizedSource)) !== null) {
-      const modulePath = m[1];
-      const alias = m[2] ?? null;
-      if (!isExternalModule(modulePath)) continue;
-
-      const pkg = topLevelPackage(modulePath);
-      const localName = alias ?? modulePath; // `import pandas as pd` → local = "pd"
-
-      // For dotted imports without alias, the local name is the full dotted path
-      // (e.g. `import os.path` gives us `os.path` as local, but usage is `os.path.join()`)
-      // We track the top-level package as the source.
-
-      namespaceMap.set(localName, pkg);
-
-      // Record in importMap as well so we can emit ImportInfo
-      importMap.set(localName, { source: pkg, imported: modulePath, type: 'namespace' });
-
-      // Build ImportInfo
-      const existing = imports.find((i) => i.source === pkg);
-      const specifier: ImportSpecifierInfo = {
-        local: localName,
-        imported: modulePath,
-        type: 'namespace',
-      };
-      if (existing) {
-        existing.specifiers.push(specifier);
-      } else {
-        imports.push({ source: pkg, specifiers: [specifier], typeOnly: false });
-      }
-    }
-  }
-
-  // b) `from X import Y, Z` / `from X.Y import Z`
-  {
-    let m: RegExpExecArray | null;
-    FROM_IMPORT_RE.lastIndex = 0;
-    while ((m = FROM_IMPORT_RE.exec(normalizedSource)) !== null) {
-      const modulePath = m[1];
-      const nameList = m[2].trim().replace(/^\(|\)$/g, ''); // strip optional parens
-      if (!isExternalModule(modulePath)) continue;
-
-      const pkg = topLevelPackage(modulePath);
-
-      // Parse the name list
-      let nm: RegExpExecArray | null;
-      NAME_ALIAS_RE.lastIndex = 0;
-      const specifiers: ImportSpecifierInfo[] = [];
-
-      while ((nm = NAME_ALIAS_RE.exec(nameList)) !== null) {
-        const imported = nm[1];
-        const localAlias = nm[2] ?? imported;
-
-        if (imported === '*') {
-          // Wildcard: `from X import *` — we can't track names; skip
-          continue;
-        }
-
-        const specifier: ImportSpecifierInfo = {
-          local: localAlias,
-          imported,
-          type: 'named',
-        };
-        specifiers.push(specifier);
-        importMap.set(localAlias, { source: pkg, imported, type: 'named' });
-        // Also register in namespaceMap so `models.Field()` style calls are captured
-        // when a named import (e.g. `from django.db import models`) is used as a module.
-        namespaceMap.set(localAlias, pkg);
-      }
-
-      if (specifiers.length === 0) continue;
-
-      const existing = imports.find((i) => i.source === pkg);
-      if (existing) {
-        for (const s of specifiers) existing.specifiers.push(s);
-      } else {
-        imports.push({ source: pkg, specifiers, typeOnly: false });
-      }
-    }
-  }
-
-  // ── Pass 2: find function/class calls ─────────────────────────────────────
-
-  // We scan for two patterns:
-  //   (A) SimpleCall:  `FuncName(`    where FuncName is in importMap → named import
-  //   (B) MemberCall:  `alias.Method(`  where alias is in namespaceMap
-
-  // To avoid double-counting, we do a single pass over the source looking
-  // for both patterns, then resolve each match.
-
-  // Build a combined regex that matches both patterns in one pass.
-  // Group 1: simple identifier before (  (may be a member call prefix)
-  // Group 2: (optional) .MethodName before (
-  const combinedRe = /\b([\w]+)(?:\.([\w]+))?\s*\(/g;
-
-  let cm: RegExpExecArray | null;
-  combinedRe.lastIndex = 0;
-
-  while ((cm = combinedRe.exec(source)) !== null) {
-    const prefix = cm[1];
-    const method = cm[2] ?? null;
-    const matchStart = cm.index;
-
-    // Skip if inside a string or comment (simple heuristic: check if the
-    // character before the match is inside a string — we do a lightweight
-    // check by scanning the line from its start)
-    const { line, col } = offsetToLineCol(matchStart, lineStarts);
-    const lineText = sourceLines[line - 1] ?? '';
-
-    // Skip matches that appear after a '#' on the same line
-    const commentIdx = lineText.indexOf('#');
-    if (commentIdx !== -1 && col - 1 >= commentIdx) continue;
-
-    // Skip decorator lines (lines starting with @)
-    const trimmed = lineText.trimStart();
-    if (trimmed.startsWith('@')) continue;
-
-    let packageSource: string | null = null;
-    let functionName: string;
-
-    if (method !== null) {
-      // Pattern B: `alias.Method(`
-      // The regex matched "alias.Method("
-      const aliasSource = namespaceMap.get(prefix);
-      if (aliasSource && isTarget(aliasSource, targetPackages)) {
-        packageSource = aliasSource;
-        functionName = `${prefix}.${method}`;
-      } else {
-        continue;
-      }
-    } else {
-      // Pattern A: `FuncName(`
-      const entry = importMap.get(prefix);
-      if (entry && isTarget(entry.source, targetPackages)) {
-        packageSource = entry.source;
-        functionName = prefix;
-      } else {
-        continue;
-      }
-    }
-
-    // Extract argument text
-    const openParenOffset = cm.index + cm[0].length - 1; // offset of '('
-    const argsText = extractArgText(source, openParenOffset + 1);
-    const args = argsText !== null
-      ? parseArgs(argsText, line, sourceLines)
-      : [];
-
-    const callInfo: FunctionCallInfo = {
-      file: filePath,
-      line,
-      column: col,
-      functionName,
-      importedFrom: packageSource,
-      args,
-      packageVersionResolved: null,
-      packageVersionMajor: null,
-      packageVersionMinor: null,
-      packageVersionPatch: null,
-      packageVersionPrerelease: null,
-      packageVersionIsPrerelease: null,
-    };
-
-    functionCalls.push(callInfo);
-  }
-
-  return { imports, componentUsages: [], functionCalls };
 }
