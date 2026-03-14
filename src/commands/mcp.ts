@@ -829,8 +829,8 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_prerelease_usage',
-      description: 'Find projects using prerelease (alpha/beta/rc) builds of an npm package.',
-      schema: z.object({
+      description: 'Find projects using prerelease (alpha/beta/rc) builds of an npm or Python package.',
+  schema: z.object({
         package_name: z.string().describe('Exact npm package name'),
         prerelease_filter: z.string().optional().describe('Substring to match inside the prerelease tag (e.g. "beta", "acme")'),
       }),
@@ -898,10 +898,10 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_export_usage',
-      description: 'Find all call sites for a specific function export from an npm package, including argument values.',
+      description: 'Find all call sites for a specific function or class export from an npm or Python package, including argument values.',
       schema: z.object({
-        package_name: z.string().describe('npm package that exports the function'),
-        export_name: z.string().describe('Exported function name, e.g. "createTheme"'),
+        package_name: z.string().describe('Package name (npm or Python) that exports the function, e.g. "fastapi" or "@acme/ui"'),
+        export_name: z.string().describe('Exported function or class name, e.g. "FastAPI" or "createTheme"'),
         package_version: z.number().int().optional().describe('Filter to a specific major version'),
         include_prerelease: z.boolean().optional().describe('Include prerelease package versions'),
       }),
@@ -912,10 +912,10 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
   server.tool(
     {
       name: 'query_export_adoption_trend',
-      description: 'Show how many projects call a specific function export over time, grouped by month. Each month reflects each project\'s last known state as of that month — projects not scanned within the window are carried forward from their most recent scan, so the count accurately represents adoption rather than scan activity.',
+      description: 'Show how many projects call a specific function or class export over time, grouped by month. Works for both npm and Python packages. Each month reflects each project\'s last known state as of that month — projects not scanned within the window are carried forward from their most recent scan, so the count accurately represents adoption rather than scan activity.',
       schema: z.object({
-        package_name: z.string().describe('npm package name'),
-        export_name: z.string().describe('Exported function name'),
+        package_name: z.string().describe('Package name (npm or Python), e.g. "fastapi" or "@acme/ui"'),
+        export_name: z.string().describe('Exported function or class name'),
         period_months: z.number().int().min(1).optional().describe('How many months back to look (default: 12)'),
       }),
     },
