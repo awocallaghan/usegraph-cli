@@ -100,6 +100,16 @@ describe('import extraction', () => {
     assert.ok(names.includes('FastAPI'), `Expected FastAPI, got: ${JSON.stringify(names)}`);
     assert.ok(names.includes('HTTPException'), `Expected HTTPException, got: ${JSON.stringify(names)}`);
   });
+
+  test('backslash continuation import captures all names', () => {
+    const src = 'from fastapi import FastAPI, \\\n    HTTPException, Depends\napp = FastAPI()\n';
+    const { imports, functionCalls } = extract(src, ['fastapi']);
+    const names = imports[0]?.specifiers.map(s => s.imported) ?? [];
+    assert.ok(names.includes('FastAPI'));
+    assert.ok(names.includes('HTTPException'));
+    assert.ok(names.includes('Depends'));
+    assert.ok(functionCalls.map(c => c.functionName).includes('FastAPI'));
+  });
 });
 
 // ─── Function call detection ──────────────────────────────────────────────────

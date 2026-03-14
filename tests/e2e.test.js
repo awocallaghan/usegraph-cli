@@ -383,6 +383,18 @@ test('dashboard data loader outputs valid JSON with correct shape', () => {
     frameworkNames.includes('react'),
     `Expected "react" in frameworkCounts, got: ${JSON.stringify(frameworkNames)}`,
   );
+
+  // Python frameworks should also appear (fastapi, flask, django, starlette)
+  assert.ok(
+    frameworkNames.some(n => ['fastapi', 'flask', 'django', 'starlette'].includes(n)),
+    `Expected a Python framework in frameworkCounts, got: ${JSON.stringify(frameworkNames)}`,
+  );
+
+  // languageCounts should distinguish javascript and python projects
+  assert.ok(Array.isArray(parsed.languageCounts), 'languageCounts should be an array');
+  const languages = parsed.languageCounts.map((r) => r.language);
+  assert.ok(languages.includes('python'), `Expected "python" in languageCounts: ${JSON.stringify(languages)}`);
+  assert.ok(languages.includes('javascript'), `Expected "javascript" in languageCounts: ${JSON.stringify(languages)}`);
 });
 
 // ─── codeAt tests ─────────────────────────────────────────────────────────────

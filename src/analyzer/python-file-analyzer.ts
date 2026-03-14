@@ -52,22 +52,27 @@ const NAME_ALIAS_RE = /(\w+)(?:\s+as\s+(\w+))?/g;
 // ─── Source pre-processing ─────────────────────────────────────────────────────
 
 /**
- * Normalise multi-line parenthesised imports onto a single line so that
- * FROM_IMPORT_RE can match them without needing to span newlines.
+ * Normalise multi-line imports onto a single line so that FROM_IMPORT_RE can
+ * match them without needing to span newlines.  Handles two forms:
  *
- * Example:
- *   from fastapi import (   →   from fastapi import FastAPI, HTTPException
- *       FastAPI,
- *       HTTPException,
- *   )
+ *   Parenthesised:
+ *     from fastapi import (    →   from fastapi import FastAPI, HTTPException
+ *         FastAPI,
+ *         HTTPException,
+ *     )
  *
- * Only rewrites `from X import (...)` blocks; leaves everything else intact.
+ *   Backslash-continued:
+ *     from fastapi import FastAPI, \    →   from fastapi import FastAPI, HTTPException
+ *         HTTPException
  */
 function normalizeMultiLineImports(source: string): string {
-  return source.replace(
+  // 1. Join backslash-continued lines: `\\\n` → ' '
+  let result = source.replace(/\\\n[ \t]*/g, ' ');
+
+  // 2. Flatten parenthesised import blocks
+  result = result.replace(
     /^([ \t]*from\s+[\w.]+\s+import\s*)\(\s*\n([\s\S]*?)\)/gm,
     (_, prefix: string, body: string) => {
-      // Flatten the body: strip leading whitespace + trailing commas/comments
       const names = body
         .split('\n')
         .map((l: string) => l.replace(/#.*$/, '').trim().replace(/,\s*$/, ''))
@@ -76,6 +81,8 @@ function normalizeMultiLineImports(source: string): string {
       return `${prefix}${names}`;
     },
   );
+
+  return result;
 }
 
 // Match function/class calls: Identifier(  or  identifier.Identifier(
