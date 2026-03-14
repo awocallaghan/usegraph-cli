@@ -49,6 +49,35 @@ const FROM_IMPORT_RE = /^[ \t]*from\s+([\w.]+)\s+import\s+([^\\#\n]+)/gm;
 // Match individual names in the import list: Name or Name as alias
 const NAME_ALIAS_RE = /(\w+)(?:\s+as\s+(\w+))?/g;
 
+// ─── Source pre-processing ─────────────────────────────────────────────────────
+
+/**
+ * Normalise multi-line parenthesised imports onto a single line so that
+ * FROM_IMPORT_RE can match them without needing to span newlines.
+ *
+ * Example:
+ *   from fastapi import (   →   from fastapi import FastAPI, HTTPException
+ *       FastAPI,
+ *       HTTPException,
+ *   )
+ *
+ * Only rewrites `from X import (...)` blocks; leaves everything else intact.
+ */
+function normalizeMultiLineImports(source: string): string {
+  return source.replace(
+    /^([ \t]*from\s+[\w.]+\s+import\s*)\(\s*\n([\s\S]*?)\)/gm,
+    (_, prefix: string, body: string) => {
+      // Flatten the body: strip leading whitespace + trailing commas/comments
+      const names = body
+        .split('\n')
+        .map((l: string) => l.replace(/#.*$/, '').trim().replace(/,\s*$/, ''))
+        .filter((l: string) => l.length > 0)
+        .join(', ');
+      return `${prefix}${names}`;
+    },
+  );
+}
+
 // Match function/class calls: Identifier(  or  identifier.Identifier(
 // We capture line positions by scanning the source line-by-line.
 const CALL_RE = /\b([\w]+)\s*\(/g;
@@ -294,6 +323,11 @@ export function extractFromPythonSource(
   const importMap: ImportMap = new Map();
   const namespaceMap: NamespaceMap = new Map();
 
+  // Normalise multi-line parenthesised imports before regex scanning.
+  // We keep the original source for line/column calculations and snippets
+  // so that reported positions stay accurate.
+  const normalizedSource = normalizeMultiLineImports(source);
+
   const lineStarts = buildLineStarts(source);
   const sourceLines = source.split('\n');
 
@@ -303,7 +337,7 @@ export function extractFromPythonSource(
   {
     let m: RegExpExecArray | null;
     SIMPLE_IMPORT_RE.lastIndex = 0;
-    while ((m = SIMPLE_IMPORT_RE.exec(source)) !== null) {
+    while ((m = SIMPLE_IMPORT_RE.exec(normalizedSource)) !== null) {
       const modulePath = m[1];
       const alias = m[2] ?? null;
       if (!isExternalModule(modulePath)) continue;
@@ -339,7 +373,7 @@ export function extractFromPythonSource(
   {
     let m: RegExpExecArray | null;
     FROM_IMPORT_RE.lastIndex = 0;
-    while ((m = FROM_IMPORT_RE.exec(source)) !== null) {
+    while ((m = FROM_IMPORT_RE.exec(normalizedSource)) !== null) {
       const modulePath = m[1];
       const nameList = m[2].trim().replace(/^\(|\)$/g, ''); // strip optional parens
       if (!isExternalModule(modulePath)) continue;

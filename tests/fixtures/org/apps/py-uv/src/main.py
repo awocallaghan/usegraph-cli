@@ -1,4 +1,9 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import (
+    FastAPI,
+    Depends,
+    HTTPException,
+    status,
+)
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel
 

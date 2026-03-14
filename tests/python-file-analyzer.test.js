@@ -81,6 +81,25 @@ describe('import extraction', () => {
     assert.equal(imports[0].source, 'fastapi');
     assert.equal(imports[0].specifiers.length, 2);
   });
+
+  test('multi-line parenthesised import is parsed correctly', () => {
+    const src = 'from fastapi import (\n    FastAPI,\n    HTTPException,\n    Depends,\n)\n';
+    const { imports } = extract(src);
+    assert.equal(imports.length, 1);
+    assert.equal(imports[0].source, 'fastapi');
+    const names = imports[0].specifiers.map(s => s.imported);
+    assert.ok(names.includes('FastAPI'));
+    assert.ok(names.includes('HTTPException'));
+    assert.ok(names.includes('Depends'));
+  });
+
+  test('multi-line import: calls to imported names are captured', () => {
+    const src = 'from fastapi import (\n    FastAPI,\n    HTTPException,\n)\napp = FastAPI()\nraise HTTPException(status_code=404)\n';
+    const { functionCalls } = extract(src, ['fastapi']);
+    const names = functionCalls.map(c => c.functionName);
+    assert.ok(names.includes('FastAPI'), `Expected FastAPI, got: ${JSON.stringify(names)}`);
+    assert.ok(names.includes('HTTPException'), `Expected HTTPException, got: ${JSON.stringify(names)}`);
+  });
 });
 
 // ─── Function call detection ──────────────────────────────────────────────────
