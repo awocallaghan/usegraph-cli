@@ -137,10 +137,15 @@ before(async () => {
   }
 
   // 3. Scan Python fixture projects directly (no git history needed)
-  for (const pyPath of PYTHON_FIXTURE_PROJECTS) {
+  // py-web targets fastapi; py-data targets flask and pandas
+  const pythonScanTargets = [
+    { path: PYTHON_FIXTURE_PROJECTS[0], packages: 'fastapi' },
+    { path: PYTHON_FIXTURE_PROJECTS[1], packages: 'flask,pandas' },
+  ];
+  for (const { path: pyPath, packages } of pythonScanTargets) {
     const result = spawnSync(
       process.execPath,
-      [DIST_CLI, 'scan', pyPath, '--packages', 'fastapi,flask'],
+      [DIST_CLI, 'scan', pyPath, '--packages', packages],
       {
         env: process.env,
         encoding: 'utf-8',
@@ -962,5 +967,110 @@ test('dependencies Parquet: both javascript and python language values present',
   assert.ok(
     languages.includes('python'),
     `Expected python in language column: ${JSON.stringify(languages)}`,
+  );
+});
+
+// ─── Python AST / function-usage e2e tests ────────────────────────────────────
+
+test('py-web: FastAPI() call appears in function_usages Parquet', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[0]); // py-web
+  const p = requireParquet('function_usages');
+  const rows = await queryParquet(
+    `SELECT export_name, package_name, file_path
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`,
+  );
+
+  assert.ok(rows.length >= 1, `Expected at least 1 function usage for py-web, got 0`);
+  const exportNames = rows.map((r) => r.export_name);
+  assert.ok(
+    exportNames.includes('FastAPI'),
+    `Expected FastAPI in function_usages for py-web, got: ${JSON.stringify(exportNames)}`,
+  );
+  // All usages should reference the fastapi package
+  for (const row of rows) {
+    assert.equal(
+      row.package_name,
+      'fastapi',
+      `Expected package_name=fastapi, got: ${row.package_name}`,
+    );
+  }
+});
+
+test('py-web: HTTPException call appears in function_usages Parquet', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[0]); // py-web
+  const p = requireParquet('function_usages');
+  const rows = await queryParquet(
+    `SELECT export_name FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true
+       AND export_name = 'HTTPException'`,
+  );
+
+  assert.ok(rows.length >= 1, `Expected HTTPException in function_usages for py-web`);
+});
+
+test('py-data: Flask() call appears in function_usages Parquet', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[1]); // py-data
+  const p = requireParquet('function_usages');
+  const rows = await queryParquet(
+    `SELECT export_name, package_name FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`,
+  );
+
+  assert.ok(rows.length >= 1, `Expected at least 1 function usage for py-data, got 0`);
+  const exportNames = rows.map((r) => r.export_name);
+  assert.ok(
+    exportNames.includes('Flask'),
+    `Expected Flask in function_usages for py-data, got: ${JSON.stringify(exportNames)}`,
+  );
+});
+
+test('py-data: pandas namespace call pd.DataFrame appears in function_usages Parquet', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[1]); // py-data
+  const p = requireParquet('function_usages');
+  const rows = await queryParquet(
+    `SELECT export_name, package_name FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true
+       AND package_name = 'pandas'`,
+  );
+
+  assert.ok(rows.length >= 1, `Expected pandas function usages in py-data`);
+  const exportNames = rows.map((r) => r.export_name);
+  assert.ok(
+    exportNames.some(n => n.includes('DataFrame')),
+    `Expected pd.DataFrame in pandas usages, got: ${JSON.stringify(exportNames)}`,
+  );
+});
+
+test('function_arg_usages: FastAPI call has args in Parquet', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[0]); // py-web
+  const p = requireParquet('function_arg_usages');
+  const rows = await queryParquet(
+    `SELECT export_name, arg_index, value_type, value FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true
+       AND export_name = 'FastAPI'`,
+  );
+
+  // FastAPI(title="py-web", version="0.1.0") → should have 2 args
+  assert.ok(rows.length >= 1, `Expected at least 1 arg row for FastAPI call in py-web`);
+  const values = rows.map((r) => r.value);
+  assert.ok(
+    values.includes('py-web'),
+    `Expected title="py-web" arg in FastAPI call args, got: ${JSON.stringify(values)}`,
   );
 });

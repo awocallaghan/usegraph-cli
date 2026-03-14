@@ -9,7 +9,7 @@ const CONFIG_FILENAMES = [
 ];
 
 export const DEFAULT_CONFIG: UsegraphConfig = {
-  include: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.mjs', '**/*.cjs'],
+  include: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.mjs', '**/*.cjs', '**/*.py'],
   exclude: [
     '**/node_modules/**',
     '**/dist/**',
@@ -21,6 +21,10 @@ export const DEFAULT_CONFIG: UsegraphConfig = {
     '**/coverage/**',
     '**/.next/**',
     '**/.nuxt/**',
+    '**/__pycache__/**',
+    '**/.venv/**',
+    '**/venv/**',
+    '**/.tox/**',
   ],
 };
 
