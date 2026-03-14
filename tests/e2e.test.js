@@ -1122,6 +1122,24 @@ test('py-django: django function calls appear in function_usages', async () => {
   );
 });
 
+test('py-django: models.CharField namespace call appears in function_usages', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[2]); // py-django
+  const p = requireParquet('function_usages');
+  const rows = await queryParquet(
+    `SELECT export_name, package_name FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`,
+  );
+
+  const exportNames = rows.map((r) => r.export_name);
+  assert.ok(
+    exportNames.some(n => n.includes('CharField') || n.includes('ForeignKey') || n.includes('TextField')),
+    `Expected django model field calls (CharField/ForeignKey/TextField) in usages, got: ${JSON.stringify(exportNames)}`,
+  );
+});
+
 test('py-service: starlette Starlette() call appears in function_usages', async () => {
   const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
   const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');

@@ -177,6 +177,25 @@ describe('argument parsing', () => {
   });
 });
 
+// ─── Named import used as module namespace ────────────────────────────────────
+
+describe('named import used as namespace', () => {
+  test('from X import models then models.Field() is captured', () => {
+    const src = 'from django.db import models\nclass A(models.Model):\n    x = models.CharField(max_length=200)\n';
+    const { functionCalls } = extract(src, ['django']);
+    const names = functionCalls.map(c => c.functionName);
+    assert.ok(names.includes('models.CharField'), `Expected models.CharField, got: ${JSON.stringify(names)}`);
+  });
+
+  test('from X import models: direct Model base ref is not a call', () => {
+    // models.Model appears in class inheritance, not as a call
+    const src = 'from django.db import models\nclass A(models.Model):\n    pass\n';
+    const { functionCalls } = extract(src, ['django']);
+    // models.Model( has no ( after it, so it won't be matched as a call
+    assert.equal(functionCalls.length, 0);
+  });
+});
+
 // ─── componentUsages is always empty for Python ──────────────────────────────
 
 test('componentUsages is always an empty array for Python files', () => {

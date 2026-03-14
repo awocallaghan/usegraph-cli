@@ -367,6 +367,9 @@ export function extractFromPythonSource(
         };
         specifiers.push(specifier);
         importMap.set(localAlias, { source: pkg, imported, type: 'named' });
+        // Also register in namespaceMap so `models.Field()` style calls are captured
+        // when a named import (e.g. `from django.db import models`) is used as a module.
+        namespaceMap.set(localAlias, pkg);
       }
 
       if (specifiers.length === 0) continue;
