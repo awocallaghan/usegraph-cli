@@ -70,6 +70,19 @@ const WORK_PROJECTS = [];
 const PYTHON_FIXTURE_PROJECTS = [
   join(FIXTURES_ROOT, 'apps/py-web'),
   join(FIXTURES_ROOT, 'apps/py-data'),
+  join(FIXTURES_ROOT, 'apps/py-django'),
+  join(FIXTURES_ROOT, 'apps/py-service'),
+  join(FIXTURES_ROOT, 'apps/py-uv'),
+  join(FIXTURES_ROOT, 'apps/py-worker'),
+];
+// Per-project target packages for Python scans
+const PYTHON_SCAN_TARGETS = [
+  { idx: 0, packages: 'fastapi' },
+  { idx: 1, packages: 'flask,pandas' },
+  { idx: 2, packages: 'django' },
+  { idx: 3, packages: 'starlette' },
+  { idx: 4, packages: 'fastapi' },
+  { idx: 5, packages: 'celery,kombu,structlog' },
 ];
 
 // Monorepo: single work dir, multiple scan targets within it
@@ -137,12 +150,8 @@ before(async () => {
   }
 
   // 3. Scan Python fixture projects directly (no git history needed)
-  // py-web targets fastapi; py-data targets flask and pandas
-  const pythonScanTargets = [
-    { path: PYTHON_FIXTURE_PROJECTS[0], packages: 'fastapi' },
-    { path: PYTHON_FIXTURE_PROJECTS[1], packages: 'flask,pandas' },
-  ];
-  for (const { path: pyPath, packages } of pythonScanTargets) {
+  for (const { idx, packages } of PYTHON_SCAN_TARGETS) {
+    const pyPath = PYTHON_FIXTURE_PROJECTS[idx];
     const result = spawnSync(
       process.execPath,
       [DIST_CLI, 'scan', pyPath, '--packages', packages],
@@ -173,9 +182,9 @@ after(() => {
 
 // ─── Assertions ───────────────────────────────────────────────────────────────
 
-test('list_projects returns exactly 11 projects', async () => {
+test('list_projects returns exactly 15 projects', async () => {
   const rows = await callTool('list_projects', {});
-  assert.equal(rows.length, 11, `Expected 11 projects, got ${rows.length}: ${JSON.stringify(rows.map(r => r.project_id))}`);
+  assert.equal(rows.length, 15, `Expected 15 projects, got ${rows.length}: ${JSON.stringify(rows.map(r => r.project_id))}`);
 });
 
 test('list_packages includes @acme/ui and @acme/utils', async () => {
@@ -278,12 +287,12 @@ test('query_dependency_versions: react 18.2.0 is present', async () => {
   );
 });
 
-test('get_scan_metadata: project_count is 11', async () => {
+test('get_scan_metadata: project_count is 15', async () => {
   const meta = await callTool('get_scan_metadata', {});
   assert.equal(
     meta.project_count,
-    11,
-    `Expected project_count=11, got ${meta.project_count}`,
+    15,
+    `Expected project_count=15, got ${meta.project_count}`,
   );
 });
 
@@ -352,7 +361,7 @@ test('dashboard data loader outputs valid JSON with correct shape', () => {
   assert.ok(Array.isArray(parsed.packageManagerCounts), 'packageManagerCounts should be an array');
 
   // Data correctness
-  assert.equal(parsed.projects.length, 11, `Expected 11 projects, got ${parsed.projects.length}`);
+  assert.equal(parsed.projects.length, 15, `Expected 15 projects, got ${parsed.projects.length}`);
   assert.ok(parsed.totalComponentUsages > 0, 'totalComponentUsages should be > 0');
   assert.ok(parsed.totalFunctionUsages > 0, 'totalFunctionUsages should be > 0');
 
@@ -1072,5 +1081,106 @@ test('function_arg_usages: FastAPI call has args in Parquet', async () => {
   assert.ok(
     values.includes('py-web'),
     `Expected title="py-web" arg in FastAPI call args, got: ${JSON.stringify(values)}`,
+  );
+});
+
+// ─── Additional Python project e2e coverage ───────────────────────────────────
+
+test('py-django: scan has pythonPackageManager = pipenv and python_framework = django', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[2]); // py-django
+  const p = requireParquet('project_snapshots');
+  const rows = await queryParquet(
+    `SELECT python_package_manager, python_framework
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`,
+  );
+
+  assert.ok(rows.length >= 1, `Expected snapshot for py-django (slug: ${slug})`);
+  assert.equal(rows[0].python_package_manager, 'pipenv');
+  assert.equal(rows[0].python_framework, 'django');
+});
+
+test('py-django: django function calls appear in function_usages', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[2]); // py-django
+  const p = requireParquet('function_usages');
+  const rows = await queryParquet(
+    `SELECT export_name, package_name FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`,
+  );
+
+  assert.ok(rows.length >= 1, `Expected django function usages in py-django`);
+  const exportNames = rows.map((r) => r.export_name);
+  assert.ok(
+    exportNames.includes('execute_from_command_line'),
+    `Expected execute_from_command_line in django usages, got: ${JSON.stringify(exportNames)}`,
+  );
+});
+
+test('py-service: starlette Starlette() call appears in function_usages', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[3]); // py-service
+  const p = requireParquet('function_usages');
+  const rows = await queryParquet(
+    `SELECT export_name, package_name FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`,
+  );
+
+  assert.ok(rows.length >= 1, `Expected starlette function usages in py-service`);
+  const exportNames = rows.map((r) => r.export_name);
+  assert.ok(
+    exportNames.includes('Starlette'),
+    `Expected Starlette in usages, got: ${JSON.stringify(exportNames)}`,
+  );
+});
+
+test('py-uv: scanned with uv package manager and FastAPI call captured', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[4]); // py-uv
+  const p = requireParquet('project_snapshots');
+  const rows = await queryParquet(
+    `SELECT python_package_manager, python_framework
+     FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`,
+  );
+
+  assert.ok(rows.length >= 1, `Expected snapshot for py-uv (slug: ${slug})`);
+  assert.equal(rows[0].python_package_manager, 'uv', `Expected uv, got: ${rows[0].python_package_manager}`);
+  assert.equal(rows[0].python_framework, 'fastapi');
+
+  // FastAPI call must also be in function_usages
+  const fp = requireParquet('function_usages');
+  const funcRows = await queryParquet(
+    `SELECT export_name FROM read_parquet('${fp.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true AND export_name = 'FastAPI'`,
+  );
+  assert.ok(funcRows.length >= 1, `Expected FastAPI call in function_usages for py-uv`);
+});
+
+test('py-worker: celery Celery() call appears in function_usages', async () => {
+  const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
+  const { computeProjectSlug } = await import('../dist/analyzer/project-identity.js');
+
+  const slug = computeProjectSlug(PYTHON_FIXTURE_PROJECTS[5]); // py-worker
+  const p = requireParquet('function_usages');
+  const rows = await queryParquet(
+    `SELECT export_name, package_name FROM read_parquet('${p.replace(/'/g, "''")}')
+     WHERE project_id = '${slug.replace(/'/g, "''")}' AND is_latest = true`,
+  );
+
+  assert.ok(rows.length >= 1, `Expected celery/kombu function usages in py-worker`);
+  const exportNames = rows.map((r) => r.export_name);
+  assert.ok(
+    exportNames.includes('Celery'),
+    `Expected Celery in usages, got: ${JSON.stringify(exportNames)}`,
   );
 });
