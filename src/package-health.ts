@@ -704,6 +704,11 @@ export async function getPackageHealth(args: {
     getLatestScanPerProject(args.package, periodB.from, periodB.to),
   ]);
 
+  // Fail fast if the package has no data at all
+  if (scansA.length === 0 && scansB.length === 0) {
+    throw new Error(`No scan data found for package "${args.package}" in the specified period.`);
+  }
+
   // 3. Run all queries in parallel
   const [adoption, versions, deltas, coverage, language] = await Promise.all([
     getAdoptionDelta(args.package, stableCorpus, scansA, scansB),
