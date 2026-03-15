@@ -38,6 +38,8 @@ import {
   requireParquet,
   sqlStr,
 } from '../parquet-query.js';
+import { getPackageHealth, parsePeriod } from '../package-health.js';
+import { MONTHLY_PACKAGE_DIGEST_PROMPT } from '../prompts/monthly-package-digest.js';
 
 // ─── CLI options ──────────────────────────────────────────────────────────────
 
@@ -666,6 +668,39 @@ async function toolGetSourceContext(args: {
   throw new Error('Either prop_name or arg_index must be provided.');
 }
 
+// ─── Package health tool ──────────────────────────────────────────────────────
+
+async function toolGetPackageHealth(args: {
+  package: string;
+  from: string;
+  to?: string;
+}): Promise<unknown> {
+  if (!args.package || typeof args.package !== 'string') {
+    throw new Error('package is required');
+  }
+  if (!args.from || typeof args.from !== 'string') {
+    throw new Error('from is required');
+  }
+
+  try {
+    return await getPackageHealth({
+      package: args.package,
+      from: args.from,
+      to: args.to,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Return a structured error rather than crashing
+    if (msg.includes('Parquet file not found') || msg.includes('usegraph build')) {
+      throw new Error(
+        `No scan data available. Run \`usegraph build\` first.\n  ${msg}`,
+      );
+    }
+    // Check for "no data" condition (package not found in corpus)
+    throw err;
+  }
+}
+
 // ─── Tool dispatch ────────────────────────────────────────────────────────────
 
 export async function callTool(
@@ -719,6 +754,8 @@ export async function callTool(
       return toolQueryCiTemplateInputs(args as Parameters<typeof toolQueryCiTemplateInputs>[0]);
     case 'query_ci_template_adoption_trend':
       return toolQueryCiTemplateAdoptionTrend(args as Parameters<typeof toolQueryCiTemplateAdoptionTrend>[0]);
+    case 'get_package_health':
+      return toolGetPackageHealth(args as Parameters<typeof toolGetPackageHealth>[0]);
     default:
       throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32601 });
   }
@@ -754,7 +791,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
 
   const server = new McpServer(
     { name: 'usegraph', version: '0.1.0' },
-    { capabilities: { tools: {} }, adapter: new ZodJsonSchemaAdapter() },
+    { capabilities: { tools: {}, prompts: {} }, adapter: new ZodJsonSchemaAdapter() },
   );
 
   if (verbose) {
@@ -985,6 +1022,41 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
       }),
     },
     async (input) => wrap(await toolQueryCiTemplateAdoptionTrend(input as Parameters<typeof toolQueryCiTemplateAdoptionTrend>[0])),
+  );
+
+  // ── Package health tool ─────────────────────────────────────────────────────
+
+  server.tool(
+    {
+      name: 'get_package_health',
+      description: `Returns structured health data for a package across the scanned project corpus, comparing two time periods. Includes adoption delta (stable-corpus-adjusted), version distribution, and component/function usage changes at call-site level with file paths and argument details. Designed to be interpreted by an LLM using the monthly_package_digest prompt. Do NOT use for simple version lookups — use query_dependency_versions instead.`,
+      schema: z.object({
+        package: z.string().describe('Package name, e.g. "@acme/ui" or "django"'),
+        from: z.string().describe('Start of the period. ISO date ("2025-01-01") or relative ("3m", "30d", "2w", "1y")'),
+        to: z.string().optional().describe('End of the period. ISO date or relative. Defaults to today.'),
+      }),
+    },
+    async (input) => wrap(await toolGetPackageHealth(input as Parameters<typeof toolGetPackageHealth>[0])),
+  );
+
+  // ── Monthly package digest prompt ───────────────────────────────────────────
+
+  server.prompt(
+    {
+      name: 'monthly_package_digest',
+      description: 'Prompt for interpreting a PackageHealthResult JSON blob into a readable monthly digest for a library team. Call get_package_health first, then pass the result JSON to this prompt.',
+    },
+    (): { messages: Array<{ role: 'user'; content: { type: 'text'; text: string } }> } => ({
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: MONTHLY_PACKAGE_DIGEST_PROMPT,
+          },
+        },
+      ],
+    }),
   );
 
   const transport = new StdioTransport(server);

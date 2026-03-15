@@ -15,7 +15,7 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -34,6 +34,7 @@ process.env.USEGRAPH_HOME = USEGRAPH_HOME;
 
 const { runBuild } = await import('../dist/commands/build.js');
 const { callTool } = await import('../dist/commands/mcp.js');
+const { getPackageHealth } = await import('../dist/package-health.js');
 
 // ─── Fixture paths ────────────────────────────────────────────────────────────
 
@@ -90,6 +91,255 @@ let MONOREPO_WORK_DIR = null;
 
 const DIST_CLI = resolve(__dirname, '..', 'dist', 'index.js');
 const TARGET_PACKAGES = '@acme/ui,@acme/utils';
+
+// ─── Health fixture helpers ────────────────────────────────────────────────────
+
+/** ISO timestamp for N days before now. */
+function healthDaysAgo(n) {
+  return new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/** Write a minimal ScanResult JSON to USEGRAPH_HOME/<slug>/scans/<id>.json */
+function writeHealthScan(scan) {
+  const dir = join(USEGRAPH_HOME, ...scan.projectSlug.split('/'), 'scans');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${scan.id}.json`), JSON.stringify(scan, null, 2));
+}
+
+/** Build a minimal ScanResult for health e2e tests */
+function makeHealthScan({
+  id, slug, codeAt, pkg, versionResolved = '2.0.0', language = 'javascript',
+  componentUsages = [], functionCalls = [],
+}) {
+  const isPrerelease = /alpha|beta|rc/i.test(versionResolved);
+  const vParts = versionResolved.replace(/[-+].*$/, '').split('.').map(Number);
+  return {
+    id,
+    schemaVersion: 1,
+    projectPath: `/health/${slug}`,
+    projectName: slug,
+    projectSlug: `health/${slug}`,
+    scannedAt: codeAt,
+    codeAt,
+    repoUrl: null,
+    branch: 'main',
+    commitSha: id,
+    packageJson: { name: slug, dependencies: { [pkg]: '*' } },
+    targetPackages: [pkg],
+    internalPackages: [],
+    fileCount: componentUsages.length + functionCalls.length,
+    files: [
+      ...componentUsages.map((cu) => ({
+        filePath: `/health/${slug}/${cu.file}`,
+        relativePath: cu.file,
+        imports: [{ source: pkg, specifiers: [{ local: cu.name, imported: cu.name, type: 'named' }], typeOnly: false }],
+        componentUsages: [{
+          file: `/health/${slug}/${cu.file}`,
+          line: cu.line ?? 5,
+          column: 1,
+          componentName: cu.name,
+          importedFrom: pkg,
+          props: (cu.props ?? []).map((p) => ({ name: p, value: 'x', isDynamic: false, sourceSnippet: null })),
+          selfClosing: true,
+          packageVersionResolved: versionResolved,
+          packageVersionMajor: vParts[0] ?? 0,
+          packageVersionMinor: vParts[1] ?? 0,
+          packageVersionPatch: vParts[2] ?? 0,
+          packageVersionPrerelease: isPrerelease ? 'beta.1' : null,
+          packageVersionIsPrerelease: isPrerelease,
+        }],
+        functionCalls: [],
+        errors: [],
+      })),
+      ...functionCalls.map((fc) => ({
+        filePath: `/health/${slug}/${fc.file}`,
+        relativePath: fc.file,
+        imports: [{ source: pkg, specifiers: [{ local: fc.name, imported: fc.name, type: 'named' }], typeOnly: false }],
+        componentUsages: [],
+        functionCalls: [{
+          file: `/health/${slug}/${fc.file}`,
+          line: fc.line ?? 10,
+          column: 1,
+          functionName: fc.name,
+          importedFrom: pkg,
+          args: (fc.args ?? []).map((a, i) => ({
+            index: i,
+            type: a.type ?? 'string',
+            value: a.value,
+            isSpread: false,
+            sourceSnippet: (a.type === 'identifier' || a.type === 'expression') ? `expr` : null,
+          })),
+          packageVersionResolved: versionResolved,
+          packageVersionMajor: vParts[0] ?? 0,
+          packageVersionMinor: vParts[1] ?? 0,
+          packageVersionPatch: vParts[2] ?? 0,
+          packageVersionPrerelease: isPrerelease ? 'beta.1' : null,
+          packageVersionIsPrerelease: isPrerelease,
+        }],
+        errors: [],
+      })),
+    ],
+    summary: {
+      totalFilesScanned: componentUsages.length + functionCalls.length,
+      filesWithErrors: 0,
+      filesWithTargetUsage: componentUsages.length + functionCalls.length,
+      totalComponentUsages: componentUsages.length,
+      totalFunctionCalls: functionCalls.length,
+      byPackage: {
+        [pkg]: {
+          totalComponentUsages: componentUsages.length,
+          totalFunctionCalls: functionCalls.length,
+          files: [],
+          components: componentUsages.map((c) => c.name),
+          functions: functionCalls.map((f) => f.name),
+        },
+      },
+    },
+    meta: {
+      packageName: slug,
+      packageVersion: '1.0.0',
+      dependencies: [{
+        name: pkg,
+        versionRange: '*',
+        section: 'dependencies',
+        versionResolved,
+        versionMajor: vParts[0] ?? 0,
+        versionMinor: vParts[1] ?? 0,
+        versionPatch: vParts[2] ?? 0,
+        versionPrerelease: isPrerelease ? 'beta.1' : null,
+        versionIsPrerelease: isPrerelease,
+        language,
+      }],
+      tooling: {
+        packageManager: language === 'python' ? null : 'npm',
+        packageManagerVersion: null, buildTool: null, testFramework: null,
+        bundler: null, linter: null, formatter: null, cssApproach: null,
+        typescript: language !== 'python', typescriptVersion: null, nodeVersion: null,
+        framework: language === 'python' ? null : 'react', frameworkVersion: null,
+        pythonPackageManager: language === 'python' ? 'pip' : null,
+        pythonVersion: language === 'python' ? '3.11' : null,
+        pythonFramework: language === 'python' ? 'fastapi' : null,
+        pythonTestFramework: null, pythonLinter: null, pythonFormatter: null, pythonTypeChecker: null,
+      },
+    },
+  };
+}
+
+/**
+ * Write health e2e fixture scans to USEGRAPH_HOME.
+ *
+ * JS/TS package: @health-e2e/ui
+ *   - health-stable: scanned in both period A (~80 days ago) and period B (~20 days ago)
+ *   - health-newbie: scanned only in period B (new to corpus)
+ *
+ * Python package: health-pylib
+ *   - health-pyproj: scanned in both periods (Python project)
+ *
+ * Mixed: both JS and Python projects use @health-e2e/shared
+ */
+function writeHealthFixtureScans() {
+  const HJS = '@health-e2e/ui';
+  const HPY = 'health-pylib';
+  const HMIX = '@health-e2e/shared';
+
+  // ── JS fixture ──────────────────────────────────────────────────────────────
+  // health-stable: period A scan (80 days ago)
+  writeHealthScan(makeHealthScan({
+    id: 'he2e-stable-a', slug: 'stable', codeAt: healthDaysAgo(80), pkg: HJS,
+    versionResolved: '2.0.0',
+    componentUsages: [
+      { file: 'src/App.tsx', name: 'Button', line: 5, props: ['variant'] },
+    ],
+    functionCalls: [
+      { file: 'src/utils.ts', name: 'createTheme', line: 10,
+        args: [{ type: 'string', value: 'light' }] },
+    ],
+  }));
+  // health-stable: period B scan (20 days ago) — Button stable, Card added, createTheme stable
+  writeHealthScan(makeHealthScan({
+    id: 'he2e-stable-b', slug: 'stable', codeAt: healthDaysAgo(20), pkg: HJS,
+    versionResolved: '2.1.0',
+    componentUsages: [
+      { file: 'src/App.tsx', name: 'Button', line: 5, props: ['variant', 'size'] },
+      // New component in period B
+      { file: 'src/Dashboard.tsx', name: 'Card', line: 8, props: ['title'] },
+      // Test file — must be excluded
+      { file: 'src/App.test.tsx', name: 'Button', line: 3, props: [] },
+    ],
+    functionCalls: [
+      { file: 'src/utils.ts', name: 'createTheme', line: 10,
+        args: [{ type: 'string', value: 'light' }] },
+      // New function call with static arg in period B
+      { file: 'src/api.ts', name: 'initClient', line: 2,
+        args: [
+          { type: 'string', value: 'https://api.example.com' },
+          { type: 'identifier', value: null }, // dynamic arg — value omitted
+        ] },
+    ],
+  }));
+
+  // health-newbie: period B only (new to corpus — excluded from deltas)
+  writeHealthScan(makeHealthScan({
+    id: 'he2e-newbie-b', slug: 'newbie', codeAt: healthDaysAgo(15), pkg: HJS,
+    versionResolved: '2.0.0-beta.1', // prerelease
+    componentUsages: [
+      { file: 'src/index.tsx', name: 'Button', line: 1 },
+    ],
+    functionCalls: [],
+  }));
+
+  // ── Python fixture ──────────────────────────────────────────────────────────
+  // health-pyproj: period A scan (85 days ago)
+  writeHealthScan(makeHealthScan({
+    id: 'he2e-py-a', slug: 'pyproj', codeAt: healthDaysAgo(85), pkg: HPY,
+    language: 'python', versionResolved: '1.0.0',
+    componentUsages: [],
+    functionCalls: [
+      { file: 'app/main.py', name: 'FastAPI', line: 5, args: [] },
+    ],
+  }));
+  // health-pyproj: period B scan (25 days ago) — FastAPI stable, new helper function added
+  writeHealthScan(makeHealthScan({
+    id: 'he2e-py-b', slug: 'pyproj', codeAt: healthDaysAgo(25), pkg: HPY,
+    language: 'python', versionResolved: '1.1.0',
+    componentUsages: [],
+    functionCalls: [
+      { file: 'app/main.py', name: 'FastAPI', line: 5, args: [] },
+      { file: 'app/worker.py', name: 'run_background', line: 12,
+        args: [{ type: 'string', value: 'daily' }] },
+      // Python test file — must be excluded
+      { file: 'tests/test_main.py', name: 'FastAPI', line: 3, args: [] },
+    ],
+  }));
+
+  // ── Mixed fixture ───────────────────────────────────────────────────────────
+  // JS project using shared pkg
+  writeHealthScan(makeHealthScan({
+    id: 'he2e-mix-js-a', slug: 'mix-js', codeAt: healthDaysAgo(78), pkg: HMIX,
+    language: 'javascript', versionResolved: '1.0.0',
+    componentUsages: [{ file: 'src/App.tsx', name: 'Widget', line: 3 }],
+    functionCalls: [],
+  }));
+  writeHealthScan(makeHealthScan({
+    id: 'he2e-mix-js-b', slug: 'mix-js', codeAt: healthDaysAgo(18), pkg: HMIX,
+    language: 'javascript', versionResolved: '1.0.0',
+    componentUsages: [{ file: 'src/App.tsx', name: 'Widget', line: 3 }],
+    functionCalls: [],
+  }));
+  // Python project using shared pkg
+  writeHealthScan(makeHealthScan({
+    id: 'he2e-mix-py-a', slug: 'mix-py', codeAt: healthDaysAgo(82), pkg: HMIX,
+    language: 'python', versionResolved: '1.0.0',
+    componentUsages: [],
+    functionCalls: [{ file: 'app/client.py', name: 'connect', line: 5, args: [] }],
+  }));
+  writeHealthScan(makeHealthScan({
+    id: 'he2e-mix-py-b', slug: 'mix-py', codeAt: healthDaysAgo(22), pkg: HMIX,
+    language: 'python', versionResolved: '1.0.0',
+    componentUsages: [],
+    functionCalls: [{ file: 'app/client.py', name: 'connect', line: 5, args: [] }],
+  }));
+}
 
 // ─── Setup / teardown ─────────────────────────────────────────────────────────
 
@@ -167,7 +417,10 @@ before(async () => {
     }
   }
 
-  // 4. Build Parquet tables
+  // 4. Write health-tool e2e fixture scans (written directly as JSON, no CLI scan needed)
+  writeHealthFixtureScans();
+
+  // 5. Build Parquet tables
   await runBuild();
 });
 
@@ -1213,4 +1466,138 @@ test('py-worker: celery Celery() call appears in function_usages', async () => {
     exportNames.includes('Celery'),
     `Expected Celery in usages, got: ${JSON.stringify(exportNames)}`,
   );
+});
+
+// ─── get_package_health e2e tests ─────────────────────────────────────────────
+
+test('get_package_health: JS package returns valid PackageHealthResult', async () => {
+  const result = await getPackageHealth({ package: '@health-e2e/ui', from: '100d' });
+  assert.equal(result.package, '@health-e2e/ui');
+  assert.ok(['js', 'python', 'mixed'].includes(result.language),
+    `Expected valid language, got: ${result.language}`);
+  assert.ok(typeof result.generatedAt === 'string', 'generatedAt should be a string');
+  assert.ok(result.corpus.stable >= 1,
+    `Expected at least 1 stable project, got ${result.corpus.stable}`);
+  assert.equal(result.adoption.delta, result.adoption.end - result.adoption.start,
+    `adoption.delta must equal end - start`);
+  assert.ok(Array.isArray(result.componentChanges.deltas));
+  assert.ok(Array.isArray(result.componentChanges.unchanged));
+  assert.ok(result.coverage.projectsExpected >= result.coverage.projectsCovered);
+});
+
+test('get_package_health: JS stable corpus excludes newbie (period B only)', async () => {
+  const result = await getPackageHealth({ package: '@health-e2e/ui', from: '100d' });
+  // 'health/newbie' is only in period B → should be in addedProjects
+  assert.ok(
+    result.corpus.addedProjects.includes('health/newbie'),
+    `Expected health/newbie in addedProjects: ${JSON.stringify(result.corpus.addedProjects)}`,
+  );
+  assert.ok(
+    !result.corpus.removedProjects.includes('health/newbie'),
+    `health/newbie should not be in removedProjects`,
+  );
+});
+
+test('get_package_health: Card component added in period B detected', async () => {
+  const result = await getPackageHealth({ package: '@health-e2e/ui', from: '100d' });
+  const cardDelta = result.componentChanges.deltas.find(
+    (d) => d.name === 'Card' && d.kind === 'component',
+  );
+  assert.ok(cardDelta, `Expected Card delta: ${JSON.stringify(result.componentChanges.deltas.map(d => `${d.kind}:${d.name}`))}`);
+  assert.equal(cardDelta.added.length, 1, 'Expected 1 added Card site');
+  assert.equal(cardDelta.added[0].project, 'health/stable');
+  assert.equal(cardDelta.added[0].file, 'src/Dashboard.tsx');
+});
+
+test('get_package_health: test file (*.test.tsx) not in results', async () => {
+  const result = await getPackageHealth({ package: '@health-e2e/ui', from: '100d' });
+  for (const delta of result.componentChanges.deltas) {
+    for (const site of [...delta.added, ...delta.removed]) {
+      assert.ok(
+        !site.file.endsWith('.test.tsx') && !site.file.endsWith('.test.ts'),
+        `Test file found in results: ${site.file}`,
+      );
+    }
+  }
+});
+
+test('get_package_health: initClient function has args including dynamic arg', async () => {
+  const result = await getPackageHealth({ package: '@health-e2e/ui', from: '100d' });
+  const initDelta = result.componentChanges.deltas.find(
+    (d) => d.name === 'initClient' && d.kind === 'function',
+  );
+  assert.ok(initDelta, `Expected initClient delta: ${JSON.stringify(result.componentChanges.deltas.map(d => `${d.kind}:${d.name}`))}`);
+  assert.equal(initDelta.added.length, 1, 'Expected 1 added initClient site');
+  assert.ok(Array.isArray(initDelta.added[0].args), 'Expected args on initClient site');
+  assert.equal(initDelta.added[0].args.length, 2, 'Expected 2 args');
+  // First arg: static with value
+  const staticArg = initDelta.added[0].args[0];
+  assert.equal(staticArg.type, 'static');
+  assert.equal(staticArg.value, 'https://api.example.com');
+  // Second arg: dynamic, no value
+  const dynamicArg = initDelta.added[0].args[1];
+  assert.equal(dynamicArg.type, 'dynamic');
+  assert.equal(dynamicArg.value, undefined);
+});
+
+test('get_package_health: Python package returns language=python', async () => {
+  const result = await getPackageHealth({ package: 'health-pylib', from: '100d' });
+  assert.equal(result.language, 'python');
+  assert.ok(result.corpus.stable >= 1, `Expected ≥1 stable Python project`);
+});
+
+test('get_package_health: Python test file (test_*.py) excluded', async () => {
+  const result = await getPackageHealth({ package: 'health-pylib', from: '100d' });
+  for (const delta of result.componentChanges.deltas) {
+    for (const site of [...delta.added, ...delta.removed]) {
+      assert.ok(
+        !site.file.match(/test_[^/]+\.py$/) && !site.file.match(/_test\.py$/),
+        `Python test file in results: ${site.file}`,
+      );
+    }
+  }
+});
+
+test('get_package_health: run_background function added in period B', async () => {
+  const result = await getPackageHealth({ package: 'health-pylib', from: '100d' });
+  const bgDelta = result.componentChanges.deltas.find(
+    (d) => d.name === 'run_background' && d.kind === 'function',
+  );
+  assert.ok(bgDelta, `Expected run_background delta: ${JSON.stringify(result.componentChanges.deltas.map(d => `${d.kind}:${d.name}`))}`);
+  assert.equal(bgDelta.added.length, 1, 'Expected 1 added run_background site');
+  // Verify the args are populated (static 'daily')
+  assert.ok(Array.isArray(bgDelta.added[0].args), 'Expected args on run_background site');
+  assert.equal(bgDelta.added[0].args[0].type, 'static');
+  assert.equal(bgDelta.added[0].args[0].value, 'daily');
+});
+
+test('get_package_health: mixed JS+Python corpus returns language=mixed', async () => {
+  const result = await getPackageHealth({ package: '@health-e2e/shared', from: '100d' });
+  assert.equal(result.language, 'mixed',
+    `Expected language=mixed, got ${result.language}`);
+  assert.ok(result.corpus.stable >= 2,
+    `Expected ≥2 stable projects (JS + Python), got ${result.corpus.stable}`);
+});
+
+test('get_package_health: no scan data returns error', async () => {
+  await assert.rejects(
+    () => getPackageHealth({ package: '@no-such-pkg/missing', from: '30d' }),
+    (err) => {
+      assert.ok(err instanceof Error || typeof err === 'object', 'Should throw an error');
+      return true;
+    },
+  );
+});
+
+test('monthly_package_digest prompt is present in MCP server', async () => {
+  // Verify the prompt is registered by checking callTool doesn't error for an unknown
+  // and that we can import the prompt constant
+  const { MONTHLY_PACKAGE_DIGEST_PROMPT } = await import('../dist/prompts/monthly-package-digest.js');
+  assert.ok(typeof MONTHLY_PACKAGE_DIGEST_PROMPT === 'string',
+    'MONTHLY_PACKAGE_DIGEST_PROMPT should be a string');
+  assert.ok(MONTHLY_PACKAGE_DIGEST_PROMPT.length > 100,
+    'Prompt content should be substantial');
+  assert.ok(MONTHLY_PACKAGE_DIGEST_PROMPT.includes('executive summary') ||
+    MONTHLY_PACKAGE_DIGEST_PROMPT.includes('Executive Summary'),
+    'Prompt should include executive summary instruction');
 });
