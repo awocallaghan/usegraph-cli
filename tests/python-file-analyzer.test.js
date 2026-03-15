@@ -1,8 +1,8 @@
 /**
  * Unit tests for the Python source file analyzer.
  *
- * Tests the regex-based parser that extracts imports and function-call usages
- * from .py files.
+ * Tests the tree-sitter-based parser that extracts imports and function-call
+ * usages from .py files.
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -61,6 +61,24 @@ describe('import extraction', () => {
     const { imports } = extract('import pandas as pd\n');
     assert.equal(imports[0].source, 'pandas');
     assert.equal(imports[0].specifiers[0].local, 'pd');
+    assert.equal(imports[0].specifiers[0].type, 'namespace');
+  });
+
+  test('import X.Y binds the top-level name X as local', () => {
+    const { imports } = extract('import fastapi.routing\n');
+    assert.equal(imports.length, 1);
+    assert.equal(imports[0].source, 'fastapi');
+    assert.equal(imports[0].specifiers[0].local, 'fastapi');
+    assert.equal(imports[0].specifiers[0].imported, 'fastapi.routing');
+    assert.equal(imports[0].specifiers[0].type, 'namespace');
+  });
+
+  test('import X.Y as alias binds the alias as local', () => {
+    const { imports } = extract('import fastapi.routing as router\n');
+    assert.equal(imports.length, 1);
+    assert.equal(imports[0].source, 'fastapi');
+    assert.equal(imports[0].specifiers[0].local, 'router');
+    assert.equal(imports[0].specifiers[0].imported, 'fastapi.routing');
     assert.equal(imports[0].specifiers[0].type, 'namespace');
   });
 
@@ -130,6 +148,14 @@ describe('function call detection', () => {
     assert.equal(functionCalls.length, 1);
     assert.equal(functionCalls[0].functionName, 'pd.DataFrame');
     assert.equal(functionCalls[0].importedFrom, 'pandas');
+  });
+
+  test('import X.Y allows calling X.method() via top-level binding', () => {
+    const src = 'import fastapi.routing\nroute = fastapi.APIRoute("/", handler)\n';
+    const { functionCalls } = extract(src, ['fastapi']);
+    assert.equal(functionCalls.length, 1);
+    assert.equal(functionCalls[0].functionName, 'fastapi.APIRoute');
+    assert.equal(functionCalls[0].importedFrom, 'fastapi');
   });
 
   test('calls to non-targeted packages are NOT captured', () => {
