@@ -831,7 +831,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
       name: 'query_prerelease_usage',
       description: 'Find projects using prerelease (alpha/beta/rc) builds of an npm or Python package.',
   schema: z.object({
-        package_name: z.string().describe('Exact npm package name'),
+        package_name: z.string().describe('Exact package name (npm or Python)'),
         prerelease_filter: z.string().optional().describe('Substring to match inside the prerelease tag (e.g. "beta", "acme")'),
       }),
     },
