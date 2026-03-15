@@ -57,17 +57,17 @@ const [projects, frameworkCounts, buildToolCounts, pmCounts, languageCounts] = a
          WHEN python_package_manager IS NOT NULL OR python_framework IS NOT NULL THEN 'python'
          ELSE 'javascript'
        END AS language,
-       COALESCE(framework, python_framework)             AS framework,
+       COALESCE(framework::VARCHAR, python_framework::VARCHAR)             AS framework,
        build_tool,
-       COALESCE(package_manager, python_package_manager) AS package_manager
+       COALESCE(package_manager::VARCHAR, python_package_manager::VARCHAR) AS package_manager
      FROM (SELECT *, ${pyFramework}, ${pyPkgMgr} FROM ${snap}) _s
      WHERE is_latest = true
      ORDER BY scanned_at DESC`,
   ),
   queryParquet(
     `SELECT name, COUNT(*) AS count FROM (
-       SELECT framework AS name FROM ${snap} WHERE is_latest = true AND framework IS NOT NULL
-       ${hasPythonCols ? `UNION ALL SELECT python_framework AS name FROM ${snap} WHERE is_latest = true AND python_framework IS NOT NULL` : ''}
+       SELECT framework::VARCHAR AS name FROM ${snap} WHERE is_latest = true AND framework IS NOT NULL
+       ${hasPythonCols ? `UNION ALL SELECT python_framework::VARCHAR AS name FROM ${snap} WHERE is_latest = true AND python_framework IS NOT NULL` : ''}
      ) _f GROUP BY name ORDER BY count DESC`,
   ),
   queryParquet(
@@ -78,8 +78,8 @@ const [projects, frameworkCounts, buildToolCounts, pmCounts, languageCounts] = a
   ),
   queryParquet(
     `SELECT name, COUNT(*) AS count FROM (
-       SELECT package_manager AS name FROM ${snap} WHERE is_latest = true AND package_manager IS NOT NULL
-       ${hasPythonCols ? `UNION ALL SELECT python_package_manager AS name FROM ${snap} WHERE is_latest = true AND python_package_manager IS NOT NULL` : ''}
+       SELECT package_manager::VARCHAR AS name FROM ${snap} WHERE is_latest = true AND package_manager IS NOT NULL
+       ${hasPythonCols ? `UNION ALL SELECT python_package_manager::VARCHAR AS name FROM ${snap} WHERE is_latest = true AND python_package_manager IS NOT NULL` : ''}
      ) _pm GROUP BY name ORDER BY count DESC`,
   ),
   queryParquet(
