@@ -5,7 +5,7 @@
 
 **[→ View the live demo dashboard](https://awocallaghan.github.io/usegraph-cli/)**
 
-A CLI tool for analysing how npm packages are used across your projects and organisation.
+A CLI tool for analysing how packages are used across your projects and organisation — supporting both JavaScript/TypeScript and Python codebases.
 Track React component props, function call arguments, import patterns, and more.
 Collect tech-stack metadata to understand your organisation's tooling landscape.
 Expose analysis results as a web dashboard or MCP server so your team and AI assistants can query your data directly.
@@ -18,12 +18,12 @@ usegraph solves this by scanning the AST of every project, recording precise usa
 
 ## Features
 
-- **Deep package usage analysis** via SWC AST parsing
+- **Deep package usage analysis** via AST parsing (SWC for JS/TS, tree-sitter for Python)
   - JSX components: which components are used, with what props and source context
   - Function calls: which functions are called, with what arguments
-  - Import tracking: named, default, and namespace imports
+  - Import tracking: named, aliased, and namespace imports — for both JS and Python
 - **Lockfile version resolution**: resolves the actual installed version for every
-  dependency (supports npm, pnpm, yarn v1, yarn Berry v2+)
+  dependency (supports npm, pnpm, yarn v1, yarn Berry v2+, Poetry, uv, PDM, pip-tools, Pipenv)
 - **Multi-project scanning**: run scans across many projects; results saved globally to `~/.usegraph/`
 - **Parquet materialisation**: `usegraph build` compresses all scan JSON into 6 typed Parquet tables
   queryable with DuckDB
@@ -31,7 +31,7 @@ usegraph solves this by scanning the AST of every project, recording precise usa
   exploring component adoption, dependency versions, and project detail
 - **MCP server**: `usegraph mcp` exposes 13 tools over stdio so Claude (and other MCP clients)
   can query your organisation's usage data directly
-- **Tech stack detection**: detect build tools, test frameworks, linters, package managers, and more
+- **Tech stack detection**: detect build tools, test frameworks, linters, formatters, package managers, and more; for Python projects additionally detects framework (Django/Flask/FastAPI/Starlette), Python version, linter, formatter, and type checker
 - **Dependency reporting**: count and categorise all npm dependencies with resolved versions
 - **Checkpoint scanning**: scan historical commits with `--since` / `--interval` to build adoption trend data
 
@@ -51,6 +51,9 @@ npx @usegraph/cli scan
 # 1. Scan one or more projects
 usegraph scan ./apps/web --packages @acme/ui,@acme/utils
 usegraph scan ./apps/mobile --packages @acme/ui,@acme/utils
+
+# Scan a Python project, tracking specific packages
+usegraph scan ./services/api --packages fastapi,sqlalchemy
 
 # 2. Build Parquet tables from all scans
 usegraph build
@@ -94,6 +97,9 @@ usegraph scan --packages @acme/ui --since 6m --interval 1m
 
 # Scan all commits in the last 2 weeks
 usegraph scan --packages @acme/ui --since 2w
+
+# Scan a Python project, tracking Flask and SQLAlchemy calls
+usegraph scan ./services/api --packages flask,sqlalchemy
 ```
 
 **`codeAt` vs `scannedAt`**
@@ -270,10 +276,12 @@ Create a `usegraph.config.json` (or `.usegraphrc`) in your project root:
 }
 ```
 
-| Field     | Default                              | Description                        |
-|-----------|--------------------------------------|------------------------------------|
-| `include` | `["**/*.ts", "**/*.tsx", ...]`       | Glob patterns for files to include |
-| `exclude` | `["**/node_modules/**", ...]`        | Glob patterns for files to exclude |
+| Field     | Default                                                                 | Description                        |
+|-----------|-------------------------------------------------------------------------|------------------------------------|
+| `include` | `["**/*.ts", "**/*.tsx", ..., "**/*.py"]`                               | Glob patterns for files to include |
+| `exclude` | `["**/node_modules/**", ..., "**/.venv/**", "**/venv/**", ...]`         | Glob patterns for files to exclude |
+
+Python virtual environment directories (`.venv/`, `venv/`, `.tox/`, `__pycache__/`, etc.) are excluded by default.
 
 ## Data Collected
 
@@ -338,6 +346,12 @@ When running `scan`, usegraph also detects and records:
   CSS approach, TypeScript version, Node.js version, framework and framework version
 - **Git metadata**: remote URL, current branch, commit SHA
 
+For Python projects, usegraph additionally detects:
+- **Package manager**: Poetry, uv, PDM, pip-tools, pip, Pipenv, Hatch
+- **Python version**: from `.python-version`, `pyproject.toml`, or `requires-python`
+- **Framework**: Django, Flask, FastAPI, Starlette
+- **Test framework, linter, formatter, type checker**: pytest, ruff, black, mypy, pyright, etc.
+
 This data is available in every Parquet table via `project_snapshots` and is queryable
 via the `query_tooling_distribution` MCP tool.
 
@@ -376,7 +390,9 @@ Old scans are retained for historical comparison.
 
 ## Supported File Types
 
-`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`
+**JavaScript/TypeScript:** `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`
+
+**Python:** `.py`, `.pyw`
 
 ## Architecture
 
@@ -392,10 +408,13 @@ src/
   analyzer/
     walker.ts               # Generic recursive SWC AST walker
     extractor.ts            # Import/JSX/call extraction from AST (with sourceSnippet)
-    file-analyzer.ts        # Per-file SWC parse + extraction
+    file-analyzer.ts        # Per-file SWC parse + extraction (dispatches .py to python-file-analyzer)
     scanner.ts              # Project-wide parallel file scanning + lockfile resolution
     meta-analyzer.ts        # Package.json + tooling detection
     lockfile.ts             # Lockfile parsers: npm, pnpm, yarn v1, yarn Berry v2+
+    python-file-analyzer.ts # Python .py AST parsing via tree-sitter
+    python-meta-analyzer.ts # Python project root detection + metadata
+    python-lockfile.ts      # Lockfile parsers: Poetry, uv, PDM, pip, pipenv
   commands/
     scan.ts                 # scan command handler
     build.ts                # build command — reads JSON scans, writes Parquet via DuckDB
@@ -410,6 +429,7 @@ src/
       project-detail.md     # Per-project tooling and usage detail
       component-explorer.md # JSX prop explorer
       function-explorer.md  # Function argument explorer
+      python-overview.md    # Python project overview (frameworks, packages, call sites)
 ```
 
 ## Local Development

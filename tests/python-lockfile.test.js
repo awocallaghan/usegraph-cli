@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import {
   poetryLockfileParser,
   pdmLockfileParser,
+  uvLockfileParser,
   pipenvLockfileParser,
   requirementsTxtParser,
   pyprojectTomlParser,
@@ -349,4 +350,152 @@ test('PyprojectTomlParser: invalid TOML returns empty array', () => {
 test('PyprojectTomlParser: empty pyproject returns empty array', () => {
   const result = pyprojectTomlParser.parse('[build-system]\nrequires = []');
   assert.deepEqual(result, []);
+});
+
+// ─── UvLockfileParser ────────────────────────────────────────────────────────
+
+test('UvLockfileParser: basic single block with version header and source', () => {
+  const content = `
+version = 4
+requires-python = ">=3.12"
+
+[[package]]
+name = "fastapi"
+version = "0.115.5"
+source = { registry = "https://pypi.org/simple" }
+`;
+  const result = uvLockfileParser.parse(content);
+  assert.equal(result.get('fastapi'), '0.115.5');
+});
+
+test('UvLockfileParser: multiple packages', () => {
+  const content = `
+version = 4
+
+[[package]]
+name = "fastapi"
+version = "0.115.5"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "pydantic"
+version = "2.9.2"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "httpx"
+version = "0.27.2"
+source = { registry = "https://pypi.org/simple" }
+`;
+  const result = uvLockfileParser.parse(content);
+  assert.equal(result.get('fastapi'), '0.115.5');
+  assert.equal(result.get('pydantic'), '2.9.2');
+  assert.equal(result.get('httpx'), '0.27.2');
+  assert.equal(result.size, 3);
+});
+
+test('UvLockfileParser: [package.metadata] sub-table does not corrupt adjacent packages', () => {
+  const content = `
+version = 4
+
+[[package]]
+name = "fastapi"
+version = "0.115.5"
+source = { registry = "https://pypi.org/simple" }
+
+[package.metadata]
+requires-dist = ["pydantic>=2.0"]
+
+[[package]]
+name = "pydantic"
+version = "2.9.2"
+source = { registry = "https://pypi.org/simple" }
+`;
+  const result = uvLockfileParser.parse(content);
+  assert.equal(result.get('fastapi'), '0.115.5');
+  assert.equal(result.get('pydantic'), '2.9.2');
+  assert.equal(result.size, 2);
+});
+
+test('UvLockfileParser: empty content returns empty map', () => {
+  const result = uvLockfileParser.parse('');
+  assert.equal(result.size, 0);
+});
+
+// ─── PyprojectTomlParser — [dependency-groups] (PEP 735) ─────────────────────
+
+test('PyprojectTomlParser: [dependency-groups].dev → devDependencies', () => {
+  const content = `
+[project]
+name = "myapp"
+version = "1.0.0"
+dependencies = ["fastapi>=0.115"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+`;
+  const result = pyprojectTomlParser.parse(content);
+  const pytest = result.find((d) => d.name === 'pytest');
+  assert.ok(pytest, 'pytest not found');
+  assert.equal(pytest.section, 'devDependencies');
+  const ruff = result.find((d) => d.name === 'ruff');
+  assert.ok(ruff, 'ruff not found');
+  assert.equal(ruff.section, 'devDependencies');
+});
+
+test('PyprojectTomlParser: {include-group} entries are skipped, strings parsed', () => {
+  const content = `
+[dependency-groups]
+test = [
+    {include-group = "dev"},
+    "coverage>=7.0",
+]
+`;
+  const result = pyprojectTomlParser.parse(content);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].name, 'coverage');
+  assert.equal(result[0].section, 'devDependencies');
+});
+
+test('PyprojectTomlParser: non-dev/test/lint group → optionalDependencies', () => {
+  const content = `
+[dependency-groups]
+docs = [
+    "mkdocs>=1.5",
+]
+`;
+  const result = pyprojectTomlParser.parse(content);
+  const mkdocs = result.find((d) => d.name === 'mkdocs');
+  assert.ok(mkdocs, 'mkdocs not found');
+  assert.equal(mkdocs.section, 'optionalDependencies');
+});
+
+test('PyprojectTomlParser: lint group → devDependencies', () => {
+  const content = `
+[dependency-groups]
+lint = [
+    "ruff>=0.5",
+]
+`;
+  const result = pyprojectTomlParser.parse(content);
+  const ruff = result.find((d) => d.name === 'ruff');
+  assert.ok(ruff, 'ruff not found');
+  assert.equal(ruff.section, 'devDependencies');
+});
+
+test('PyprojectTomlParser: all [dependency-groups] entries have language = python', () => {
+  const content = `
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+`;
+  const result = pyprojectTomlParser.parse(content);
+  for (const dep of result) {
+    assert.equal(dep.language, 'python', `dep ${dep.name} should have language=python`);
+  }
 });

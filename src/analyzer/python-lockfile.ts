@@ -146,6 +146,23 @@ export class PdmLockfileParser {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// UvLockfileParser — uv.lock
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Parses `uv.lock`. uv uses the same `[[package]]` TOML structure as
+ * Poetry/PDM, so we reuse the same state machine. The top-level `version = 4`
+ * header and `source = { ... }` lines are ignored naturally. Sub-tables like
+ * `[package.metadata]` terminate the current package block (start with `[`
+ * but not `[[package]]`), so both packages on either side are parsed correctly.
+ */
+export class UvLockfileParser {
+  parse(content: string): Map<string, string> {
+    return new PoetryLockfileParser().parse(content);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PipenvLockfileParser — Pipfile.lock
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -397,6 +414,23 @@ export class PyprojectTomlParser {
       }
     }
 
+    // ── PEP 735 [dependency-groups] — used by uv ─────────────────────────────
+    const depGroups = doc['dependency-groups'];
+    if (depGroups && typeof depGroups === 'object') {
+      for (const [groupName, groupItems] of Object.entries(depGroups as Record<string, unknown>)) {
+        if (!Array.isArray(groupItems)) continue;
+        const section: DependencyEntry['section'] =
+          groupName === 'dev' || groupName === 'test' || groupName === 'lint'
+            ? 'devDependencies'
+            : 'optionalDependencies';
+        for (const item of groupItems) {
+          if (item === null || typeof item !== 'string') continue; // skip {include-group = ...}
+          const entry = this._parsePep508String(item, section);
+          if (entry) result.push(entry);
+        }
+      }
+    }
+
     return result;
   }
 
@@ -459,6 +493,7 @@ export class PyprojectTomlParser {
 
 export const poetryLockfileParser = new PoetryLockfileParser();
 export const pdmLockfileParser = new PdmLockfileParser();
+export const uvLockfileParser = new UvLockfileParser();
 export const pipenvLockfileParser = new PipenvLockfileParser();
 export const requirementsTxtParser = new RequirementsTxtParser();
 export const pyprojectTomlParser = new PyprojectTomlParser();

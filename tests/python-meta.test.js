@@ -318,3 +318,205 @@ test('detectAndParsePythonProject: py-web fixture has fastapi framework', async 
   assert.equal(fastapi.versionResolved, '0.115.0');
   assert.equal(fastapi.language, 'python');
 });
+
+// ─── detectAndParsePythonProject — uv ────────────────────────────────────────
+
+test('findPythonProjectRoot: detects uv.lock as sentinel', () => {
+  const dir = makeProject({ 'uv.lock': 'version = 4\n' });
+  const result = findPythonProjectRoot(dir);
+  assert.equal(result, dir);
+});
+
+test('detectAndParsePythonProject: uv.lock → packageManager = uv', () => {
+  const dir = makeProject({
+    'pyproject.toml': `
+[project]
+name = "my-uv-app"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.115"]
+
+[tool.uv]
+environments = ["python >= '3.12'"]
+`,
+    'uv.lock': `
+version = 4
+
+[[package]]
+name = "fastapi"
+version = "0.115.5"
+source = { registry = "https://pypi.org/simple" }
+`,
+    '.python-version': '3.12',
+  });
+
+  const meta = detectAndParsePythonProject(dir);
+  assert.equal(meta.pythonPackageManager, 'uv');
+  assert.equal(meta.pythonVersion, '3.12');
+  assert.equal(meta.packageName, 'my-uv-app');
+  assert.equal(meta.packageVersion, '1.0.0');
+  assert.equal(meta.pythonFramework, 'fastapi');
+});
+
+test('detectAndParsePythonProject: uv resolved versions from uv.lock', () => {
+  const dir = makeProject({
+    'pyproject.toml': `
+[project]
+name = "myapp"
+version = "0.1.0"
+dependencies = ["fastapi>=0.115", "pydantic>=2.8"]
+`,
+    'uv.lock': `
+version = 4
+
+[[package]]
+name = "fastapi"
+version = "0.115.5"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "pydantic"
+version = "2.9.2"
+source = { registry = "https://pypi.org/simple" }
+`,
+  });
+
+  const meta = detectAndParsePythonProject(dir);
+  const fastapi = meta.dependencies.find((d) => d.name === 'fastapi');
+  assert.ok(fastapi);
+  assert.equal(fastapi.versionResolved, '0.115.5');
+  assert.equal(fastapi.versionMajor, 0);
+  assert.equal(fastapi.versionMinor, 115);
+  assert.equal(fastapi.versionPatch, 5);
+
+  const pydantic = meta.dependencies.find((d) => d.name === 'pydantic');
+  assert.ok(pydantic);
+  assert.equal(pydantic.versionResolved, '2.9.2');
+});
+
+test('detectAndParsePythonProject: [dependency-groups] dev deps → devDependencies with resolved versions', () => {
+  const dir = makeProject({
+    'pyproject.toml': `
+[project]
+name = "myapp"
+version = "0.1.0"
+dependencies = ["fastapi>=0.115"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+`,
+    'uv.lock': `
+version = 4
+
+[[package]]
+name = "fastapi"
+version = "0.115.5"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "pytest"
+version = "8.3.3"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "ruff"
+version = "0.6.9"
+source = { registry = "https://pypi.org/simple" }
+`,
+  });
+
+  const meta = detectAndParsePythonProject(dir);
+  const pytest = meta.dependencies.find((d) => d.name === 'pytest');
+  assert.ok(pytest, 'pytest not found');
+  assert.equal(pytest.section, 'devDependencies');
+  assert.equal(pytest.versionResolved, '8.3.3');
+
+  const ruff = meta.dependencies.find((d) => d.name === 'ruff');
+  assert.ok(ruff, 'ruff not found');
+  assert.equal(ruff.section, 'devDependencies');
+  assert.equal(ruff.versionResolved, '0.6.9');
+});
+
+test('detectAndParsePythonProject: [tool.uv] alone (no uv.lock) → packageManager = uv, no resolved versions', () => {
+  const dir = makeProject({
+    'pyproject.toml': `
+[project]
+name = "myapp"
+version = "0.1.0"
+dependencies = ["fastapi>=0.115"]
+
+[tool.uv]
+environments = ["python >= '3.12'"]
+`,
+  });
+
+  const meta = detectAndParsePythonProject(dir);
+  assert.equal(meta.pythonPackageManager, 'uv');
+  const fastapi = meta.dependencies.find((d) => d.name === 'fastapi');
+  assert.ok(fastapi);
+  assert.equal(fastapi.versionResolved, null);
+});
+
+test('detectAndParsePythonProject: all uv deps have language = python', () => {
+  const dir = makeProject({
+    'pyproject.toml': `
+[project]
+name = "myapp"
+version = "0.1.0"
+dependencies = ["fastapi>=0.115"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+`,
+    'uv.lock': `
+version = 4
+
+[[package]]
+name = "fastapi"
+version = "0.115.5"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "pytest"
+version = "8.3.3"
+source = { registry = "https://pypi.org/simple" }
+`,
+  });
+
+  const meta = detectAndParsePythonProject(dir);
+  for (const dep of meta.dependencies) {
+    assert.equal(dep.language, 'python', `dep ${dep.name} should have language=python`);
+  }
+});
+
+// ─── detectAndParsePythonProject — py-uv fixture ─────────────────────────────
+
+test('detectAndParsePythonProject: py-uv fixture (uv)', async () => {
+  const { resolve } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const __dirname = fileURLToPath(new URL('.', import.meta.url));
+  const fixtureDir = resolve(__dirname, 'fixtures/org/apps/py-uv');
+
+  const meta = detectAndParsePythonProject(fixtureDir);
+  assert.equal(meta.pythonPackageManager, 'uv');
+  assert.equal(meta.pythonFramework, 'fastapi');
+  assert.equal(meta.pythonTestFramework, 'pytest');
+  assert.equal(meta.pythonVersion, '3.12');
+  assert.equal(meta.packageName, 'py-uv');
+  assert.equal(meta.packageVersion, '0.2.0');
+
+  const fastapi = meta.dependencies.find((d) => d.name === 'fastapi');
+  assert.ok(fastapi, 'fastapi not found');
+  assert.equal(fastapi.versionResolved, '0.115.5');
+
+  const pytest = meta.dependencies.find((d) => d.name === 'pytest');
+  assert.ok(pytest, 'pytest not found');
+  assert.equal(pytest.section, 'devDependencies');
+
+  const coverage = meta.dependencies.find((d) => d.name === 'coverage');
+  assert.ok(coverage, 'coverage not found');
+  assert.equal(coverage.versionResolved, '7.6.1');
+});

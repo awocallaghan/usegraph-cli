@@ -87,6 +87,9 @@ interface SnapshotRow {
   formatter: string | null;
   css_approach: string | null;
   node_version: string | null;
+  python_package_manager: string | null;
+  python_version: string | null;
+  python_framework: string | null;
 }
 
 interface PropUsageRow {
@@ -194,7 +197,7 @@ async function loadProjects(
     ? `AND project_id = '${sqlStr(opts.project)}'`
     : '';
   const frameworkFilter = opts.framework
-    ? `AND framework = '${sqlStr(opts.framework)}'`
+    ? `AND (framework = '${sqlStr(opts.framework)}' OR python_framework = '${sqlStr(opts.framework)}')`
     : '';
   const buildToolFilter = opts.buildTool
     ? `AND build_tool = '${sqlStr(opts.buildTool)}'`
@@ -574,6 +577,10 @@ async function printSingleProject(
     if (snapshot.typescript !== null)
       toolRows.push(['TypeScript', snapshot.typescript_version ?? 'yes']);
     if (snapshot.node_version) toolRows.push(['Node', snapshot.node_version]);
+    // Python-specific tooling
+    if (snapshot.python_framework) toolRows.push(['Python Framework', snapshot.python_framework]);
+    if (snapshot.python_package_manager) toolRows.push(['Python Pkg Manager', snapshot.python_package_manager]);
+    if (snapshot.python_version) toolRows.push(['Python', snapshot.python_version]);
 
     if (toolRows.length > 0) {
       console.log(chalk.bold('Detected tooling:'));
