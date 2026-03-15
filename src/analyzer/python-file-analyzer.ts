@@ -260,7 +260,8 @@ function collectSimpleImport(
       local = aliasField ? aliasField.text : modulePath;
     } else {
       modulePath = nameNode.text;
-      local = modulePath;
+      // `import X.Y` binds the top-level name X in the local namespace
+      local = modulePath.split('.')[0];
     }
 
     if (!isExternalModule(modulePath)) continue;
