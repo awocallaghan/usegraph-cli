@@ -77,9 +77,11 @@ async function toolGetScanMetadata(): Promise<unknown> {
 
 async function toolQueryScanCoverage(args: {
   period_months?: number;
+  project_slug_prefix?: string | string[];
 }): Promise<unknown> {
   const p = requireParquet('project_snapshots');
   const months = typeof args.period_months === 'number' ? args.period_months : 12;
+  const slugFilter = buildSlugPrefixFilter(args.project_slug_prefix);
   return queryParquet(`
     WITH
       months AS (
@@ -91,6 +93,7 @@ async function toolQueryScanCoverage(args: {
           date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS period,
           COUNT(DISTINCT project_id)::INTEGER AS projects_scanned
         FROM read_parquet('${sqlStr(p)}')
+        WHERE true ${slugFilter}
         GROUP BY 1
       )
     SELECT
@@ -114,6 +117,7 @@ const ECOSYSTEM_TOOLING_CATEGORIES = [
 async function toolGetEcosystemSummary(args: {
   top_packages_limit?: number;
   language?: 'javascript' | 'python';
+  project_slug_prefix?: string | string[];
 }): Promise<unknown> {
   const limit = Math.min(Math.max(1, args.top_packages_limit ?? 20), 200);
   const sp = requireParquet('project_snapshots');
@@ -123,6 +127,7 @@ async function toolGetEcosystemSummary(args: {
     : args.language === 'javascript'
     ? `AND (python_package_manager IS NULL AND python_framework IS NULL)`
     : '';
+  const slugFilter = buildSlugPrefixFilter(args.project_slug_prefix);
 
   const [projectCountsRows, jsPackages, pyPackages, toolingResult] = await Promise.all([
     queryParquet(`
@@ -135,7 +140,7 @@ async function toolGetEcosystemSummary(args: {
         END AS language,
         COUNT(DISTINCT project_id)::INTEGER AS project_count
       FROM read_parquet('${sqlStr(sp)}')
-      WHERE is_latest = true ${langFilter}
+      WHERE is_latest = true ${langFilter} ${slugFilter}
       GROUP BY 1
     `),
     args.language === 'python'
@@ -143,7 +148,7 @@ async function toolGetEcosystemSummary(args: {
       : queryParquet(`
           SELECT package_name, COUNT(DISTINCT project_id)::INTEGER AS project_count
           FROM read_parquet('${sqlStr(dp)}')
-          WHERE is_latest = true AND language = 'javascript'
+          WHERE is_latest = true AND language = 'javascript' ${slugFilter}
           GROUP BY package_name
           ORDER BY project_count DESC
           LIMIT ${limit}
@@ -153,13 +158,14 @@ async function toolGetEcosystemSummary(args: {
       : queryParquet(`
           SELECT package_name, COUNT(DISTINCT project_id)::INTEGER AS project_count
           FROM read_parquet('${sqlStr(dp)}')
-          WHERE is_latest = true AND language = 'python'
+          WHERE is_latest = true AND language = 'python' ${slugFilter}
           GROUP BY package_name
           ORDER BY project_count DESC
           LIMIT ${limit}
         `),
     toolQueryToolingDistribution({
       categories: [...ECOSYSTEM_TOOLING_CATEGORIES],
+      project_slug_prefix: args.project_slug_prefix,
     }) as Promise<Record<string, Array<{ value: string; project_count: number; projects: string[] }>>>,
   ]);
 
@@ -195,6 +201,7 @@ async function toolListProjects(args: {
   stale_after_days?: number;
   language?: 'javascript' | 'python';
   count_only?: boolean;
+  project_slug_prefix?: string | string[];
 }): Promise<unknown> {
   const p = requireParquet('project_snapshots');
   const frameworkFilter = args.framework
@@ -209,6 +216,7 @@ async function toolListProjects(args: {
     : args.language === 'javascript'
     ? `AND (python_package_manager IS NULL AND python_framework IS NULL)`
     : '';
+  const slugFilter = buildSlugPrefixFilter(args.project_slug_prefix);
   if (args.count_only === true) {
     const rows = await queryParquet(`
       SELECT COUNT(DISTINCT project_id)::INTEGER AS project_count
@@ -217,6 +225,7 @@ async function toolListProjects(args: {
         ${frameworkFilter}
         ${buildToolFilter}
         ${languageFilter}
+        ${slugFilter}
     `);
     const count = (rows[0] as { project_count: number })?.project_count ?? 0;
     return { project_count: count, ...(args.language && { language: args.language }) };
@@ -244,6 +253,7 @@ async function toolListProjects(args: {
       ${frameworkFilter}
       ${buildToolFilter}
       ${languageFilter}
+      ${slugFilter}
     ORDER BY project_id
     LIMIT 100
   `);
@@ -257,6 +267,7 @@ async function toolListPackages(args: {
   limit?: number;
   include_versions?: boolean;
   min_projects?: number;
+  project_slug_prefix?: string | string[];
 }): Promise<unknown> {
   const p = requireParquet('dependencies');
   const scopeFilter = args.scope
@@ -271,6 +282,7 @@ async function toolListPackages(args: {
   const langFilter = args.language
     ? `AND language = '${sqlStr(args.language)}'`
     : '';
+  const slugFilter = buildSlugPrefixFilter(args.project_slug_prefix);
   const limit = Math.min(Math.max(1, args.limit ?? 100), 1000);
   const havingFilter =
     typeof args.min_projects === 'number' && args.min_projects >= 1
@@ -291,6 +303,7 @@ async function toolListPackages(args: {
       ${namePrefixFilter}
       ${depTypeFilter}
       ${langFilter}
+      ${slugFilter}
     GROUP BY package_name
     ${havingFilter}
     ORDER BY project_count DESC
@@ -467,6 +480,13 @@ async function toolQueryPrereleaseUsage(args: {
   `);
 }
 
+function buildSlugPrefixFilter(prefix: string | string[] | undefined, column = 'project_id'): string {
+  if (!prefix || (Array.isArray(prefix) && prefix.length === 0)) return '';
+  const prefixes = Array.isArray(prefix) ? prefix : [prefix];
+  const conditions = prefixes.map((p) => `${column} LIKE '${sqlStr(p)}%'`).join(' OR ');
+  return `AND (${conditions})`;
+}
+
 function applyProjectsLimit<T extends { projects?: string[] }>(
   rows: T[],
   limit?: number,
@@ -489,6 +509,7 @@ async function toolQueryDependencyAdoptionTrend(args: {
   period_months?: number;
   include_projects?: boolean;
   projects_limit?: number;
+  project_slug_prefix?: string | string[];
 }): Promise<unknown> {
   const p = requireParquet('dependencies');
   const months = typeof args.period_months === 'number' ? args.period_months : 12;
@@ -497,6 +518,7 @@ async function toolQueryDependencyAdoptionTrend(args: {
   const langFilter = args.language
     ? `AND language = '${sqlStr(args.language)}'`
     : '';
+  const slugFilter = buildSlugPrefixFilter(args.project_slug_prefix);
   const projectsSelect = includeProjects
     ? ', array_agg(DISTINCT e.project_id) AS projects'
     : '';
@@ -512,7 +534,7 @@ async function toolQueryDependencyAdoptionTrend(args: {
           project_id,
           date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS scan_month
         FROM read_parquet('${sqlStr(p)}')
-        WHERE true ${pkgFilter} ${langFilter}
+        WHERE true ${pkgFilter} ${langFilter} ${slugFilter}
       ),
       project_scan_months AS (
         SELECT DISTINCT
@@ -552,6 +574,7 @@ async function toolQueryDependencyAdoptionTrend(args: {
 async function toolQueryToolingDistribution(args: {
   category?: string;
   categories?: string[];
+  project_slug_prefix?: string | string[];
 }): Promise<unknown> {
   const rawCategories = args.categories ?? (args.category ? [args.category] : []);
   const categories = rawCategories.length > 0
@@ -565,6 +588,7 @@ async function toolQueryToolingDistribution(args: {
     }
   }
   const p = requireParquet('project_snapshots');
+  const slugFilter = buildSlugPrefixFilter(args.project_slug_prefix);
   const results = await Promise.all(
     categories.map(async (col) => {
       const rows = await queryParquet(`
@@ -575,6 +599,7 @@ async function toolQueryToolingDistribution(args: {
         FROM read_parquet('${sqlStr(p)}')
         WHERE is_latest = true
           AND ${col} IS NOT NULL
+          ${slugFilter}
         GROUP BY ${col}
         ORDER BY project_count DESC
         LIMIT 100
@@ -919,6 +944,7 @@ async function toolQueryExportAdoptionTrend(args: {
 async function toolListCiTemplates(args: {
   provider?: string;
   template_type?: string;
+  project_slug_prefix?: string | string[];
 }): Promise<unknown> {
   const p = requireParquet('ci_template_usages');
   const providerFilter = args.provider
@@ -927,6 +953,7 @@ async function toolListCiTemplates(args: {
   const typeFilter = args.template_type
     ? `AND template_type = '${sqlStr(args.template_type)}'`
     : '';
+  const slugFilter = buildSlugPrefixFilter(args.project_slug_prefix);
   return queryParquet(`
     SELECT
       source,
@@ -939,6 +966,7 @@ async function toolListCiTemplates(args: {
     WHERE is_latest = true
       ${providerFilter}
       ${typeFilter}
+      ${slugFilter}
     GROUP BY source, provider, template_type
     ORDER BY project_count DESC
     LIMIT 100
@@ -1002,11 +1030,13 @@ async function toolQueryCiTemplateAdoptionTrend(args: {
   period_months?: number;
   include_projects?: boolean;
   projects_limit?: number;
+  project_slug_prefix?: string | string[];
 }): Promise<unknown> {
   const p = requireParquet('ci_template_usages');
   const months = typeof args.period_months === 'number' ? args.period_months : 12;
   const includeProjects = args.include_projects === true;
   const srcFilter = `AND source = '${sqlStr(args.source)}'`;
+  const slugFilter = buildSlugPrefixFilter(args.project_slug_prefix);
   const projectsSelect = includeProjects
     ? ', array_agg(DISTINCT e.project_id) AS projects'
     : '';
@@ -1022,7 +1052,7 @@ async function toolQueryCiTemplateAdoptionTrend(args: {
           project_id,
           date_trunc('month', COALESCE(code_at::VARCHAR, scanned_at::VARCHAR)::TIMESTAMP)::DATE AS scan_month
         FROM read_parquet('${sqlStr(p)}')
-        WHERE true ${srcFilter}
+        WHERE true ${srcFilter} ${slugFilter}
       ),
       project_scan_months AS (
         SELECT DISTINCT
@@ -1222,6 +1252,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
       description: 'Return how many projects had at least one scan in each month over a time window. Use this to interpret adoption trends: low counts in early months may be due to fewer projects scanned in that period rather than lower adoption. Compare with query_dependency_adoption_trend to distinguish real adoption from scan rollout.',
       schema: z.object({
         period_months: z.number().int().min(1).optional().describe('How many months back to include (default: 12)'),
+        project_slug_prefix: z.union([z.string(), z.array(z.string())]).optional().describe('Restrict results to projects whose slug starts with this prefix (e.g. "github.com/my-org/"). Pass an array for OR matching across multiple prefixes.'),
       }),
     },
     async (input) => wrap(await toolQueryScanCoverage(input as Parameters<typeof toolQueryScanCoverage>[0])),
@@ -1234,6 +1265,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
       schema: z.object({
         top_packages_limit: z.number().int().min(1).max(200).optional().describe('Max number of top packages per language (default: 20)'),
         language: z.enum(['javascript', 'python']).optional().describe('If set, limit summary to this language only'),
+        project_slug_prefix: z.union([z.string(), z.array(z.string())]).optional().describe('Restrict results to projects whose slug starts with this prefix (e.g. "github.com/my-org/"). Pass an array for OR matching across multiple prefixes.'),
       }),
     },
     async (input) => wrap(await toolGetEcosystemSummary(input as Parameters<typeof toolGetEcosystemSummary>[0])),
@@ -1249,6 +1281,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
         stale_after_days: z.number().int().min(1).optional().describe('Flag projects not scanned within this many days'),
         language: z.enum(['javascript', 'python']).optional().describe('Filter to projects of a specific language ecosystem'),
         count_only: z.boolean().optional().describe('If true, return only { project_count, language? } without the project list'),
+        project_slug_prefix: z.union([z.string(), z.array(z.string())]).optional().describe('Restrict results to projects whose slug starts with this prefix (e.g. "github.com/my-org/"). Pass an array for OR matching across multiple prefixes.'),
       }),
     },
     async (input) => wrap(await toolListProjects(input as Parameters<typeof toolListProjects>[0])),
@@ -1260,12 +1293,13 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
       description: 'List packages (npm or Python) detected across all projects, ranked by adoption count. Filter by scope (npm), name_prefix (e.g. Python internal packages), dependency type, or language. For internal packages use scope (npm, e.g. "@mintel") and name_prefix (Python, e.g. "mintel").',
       schema: z.object({
         scope: z.string().optional().describe('npm scope prefix, e.g. "@acme" to filter to @acme/* packages'),
-        name_prefix: z.string().optional().describe('Filter to packages whose name starts with this string (e.g. "mintel" for Python internal packages)'),
+        name_prefix: z.string().optional().describe('Filter to packages whose name starts with this string'),
         dep_type: z.string().optional().describe('Dependency section: "dependencies", "devDependencies", "peerDependencies", or "optionalDependencies"'),
         language: z.string().optional().describe('Filter to a specific language ecosystem: "javascript" or "python"'),
         limit: z.number().int().min(1).max(1000).optional().describe('Max number of packages to return (default: 100)'),
         include_versions: z.boolean().optional().describe('If false, omit versions_seen to reduce payload size (default: true)'),
         min_projects: z.number().int().min(1).optional().describe('Only include packages used in at least this many projects'),
+        project_slug_prefix: z.union([z.string(), z.array(z.string())]).optional().describe('Restrict results to projects whose slug starts with this prefix (e.g. "github.com/my-org/"). Pass an array for OR matching across multiple prefixes.'),
       }),
     },
     async (input) => wrap(await toolListPackages(input as Parameters<typeof toolListPackages>[0])),
@@ -1322,6 +1356,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
         period_months: z.number().int().min(1).optional().describe('How many months back to look (default: 12)'),
         include_projects: z.boolean().optional().describe('If true, include the list of project IDs per period (same carry-forward semantics as the count). May increase payload size.'),
         projects_limit: z.number().int().min(1).max(2000).optional().describe('When include_projects is true, cap the number of project IDs per period; if exceeded, projects_truncated is set.'),
+        project_slug_prefix: z.union([z.string(), z.array(z.string())]).optional().describe('Restrict results to projects whose slug starts with this prefix (e.g. "github.com/my-org/"). Pass an array for OR matching across multiple prefixes.'),
       }),
     },
     async (input) => wrap(await toolQueryDependencyAdoptionTrend(input as Parameters<typeof toolQueryDependencyAdoptionTrend>[0])),
@@ -1334,6 +1369,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
       schema: z.object({
         category: z.string().optional().describe('Single category (use categories for multiple)'),
         categories: z.array(z.string()).optional().describe('Category names to query in one call, e.g. ["framework", "build_tool", "test_framework"]'),
+        project_slug_prefix: z.union([z.string(), z.array(z.string())]).optional().describe('Restrict results to projects whose slug starts with this prefix (e.g. "github.com/my-org/"). Pass an array for OR matching across multiple prefixes.'),
       }),
     },
     async (input) => wrap(await toolQueryToolingDistribution(input as Parameters<typeof toolQueryToolingDistribution>[0])),
@@ -1444,6 +1480,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
       schema: z.object({
         provider: z.string().optional().describe('Filter to a specific CI provider: "github" or "gitlab"'),
         template_type: z.string().optional().describe('Filter to a specific template type, e.g. "action", "reusable_workflow", "gitlab_component"'),
+        project_slug_prefix: z.union([z.string(), z.array(z.string())]).optional().describe('Restrict results to projects whose slug starts with this prefix (e.g. "github.com/my-org/"). Pass an array for OR matching across multiple prefixes.'),
       }),
     },
     async (input) => wrap(await toolListCiTemplates(input as Parameters<typeof toolListCiTemplates>[0])),
@@ -1482,6 +1519,7 @@ export async function runMcp(opts: McpOptions = {}): Promise<void> {
         period_months: z.number().int().min(1).optional().describe('How many months back to look (default: 12)'),
         include_projects: z.boolean().optional().describe('If true, include the list of project IDs per period (same carry-forward semantics as the count). May increase payload size.'),
         projects_limit: z.number().int().min(1).max(2000).optional().describe('When include_projects is true, cap the number of project IDs per period; if exceeded, projects_truncated is set.'),
+        project_slug_prefix: z.union([z.string(), z.array(z.string())]).optional().describe('Restrict results to projects whose slug starts with this prefix (e.g. "github.com/my-org/"). Pass an array for OR matching across multiple prefixes.'),
       }),
     },
     async (input) => wrap(await toolQueryCiTemplateAdoptionTrend(input as Parameters<typeof toolQueryCiTemplateAdoptionTrend>[0])),

@@ -1089,6 +1089,268 @@ test('py-data: scan has pythonPackageManager = pip-tools', async () => {
   );
 });
 
+// ─── project_slug_prefix filter tests ────────────────────────────────────────
+//
+// All fixture projects are scanned from remotes under https://github.com/test-org/
+// so their slugs look like "github.com/test-org/<name>".
+// We use this known prefix to exercise the filter, and an unrecognised prefix
+// to verify that scoping to an absent fleet returns empty / zero results.
+
+test('list_packages: project_slug_prefix scopes results to matching projects', async () => {
+  const all = await callTool('list_packages', { language: 'javascript' });
+  const filtered = await callTool('list_packages', {
+    language: 'javascript',
+    project_slug_prefix: 'github.com/test-org/',
+  });
+
+  // All fixture projects match this prefix, so results should be identical
+  assert.ok(filtered.length >= 1, 'Expected at least 1 package with matching prefix');
+  assert.equal(
+    filtered.length,
+    all.length,
+    'Filtering to the only org prefix should return same results as no filter',
+  );
+});
+
+test('list_packages: project_slug_prefix with non-matching prefix returns empty results', async () => {
+  const rows = await callTool('list_packages', {
+    language: 'javascript',
+    project_slug_prefix: 'gitlab.example.com/other-org/',
+  });
+  assert.equal(rows.length, 0, `Expected 0 packages for unrecognised prefix, got ${rows.length}`);
+});
+
+test('list_packages: project_slug_prefix array (OR) returns union of matches', async () => {
+  const single = await callTool('list_packages', {
+    language: 'javascript',
+    project_slug_prefix: 'github.com/test-org/',
+  });
+  const multi = await callTool('list_packages', {
+    language: 'javascript',
+    project_slug_prefix: ['github.com/test-org/', 'gitlab.example.com/no-match/'],
+  });
+  // OR with a no-match prefix should equal single-prefix results
+  assert.equal(
+    multi.length,
+    single.length,
+    'OR filter with one matching and one non-matching prefix should equal single-prefix count',
+  );
+});
+
+test('query_tooling_distribution: project_slug_prefix scopes to matching fleet', async () => {
+  const all = await callTool('query_tooling_distribution', { category: 'test_framework' });
+  const filtered = await callTool('query_tooling_distribution', {
+    category: 'test_framework',
+    project_slug_prefix: 'github.com/test-org/',
+  });
+  const allRows = all.test_framework ?? [];
+  const filteredRows = filtered.test_framework ?? [];
+
+  // All fixtures match the prefix, so total project count across values should be equal
+  const sumAll = allRows.reduce((s, r) => s + r.project_count, 0);
+  const sumFiltered = filteredRows.reduce((s, r) => s + r.project_count, 0);
+  assert.equal(sumFiltered, sumAll, 'Sum of project counts should be identical when all projects match the prefix');
+});
+
+test('query_tooling_distribution: non-matching prefix returns empty distribution', async () => {
+  const result = await callTool('query_tooling_distribution', {
+    category: 'test_framework',
+    project_slug_prefix: 'gitlab.example.com/no-match/',
+  });
+  const rows = result.test_framework ?? [];
+  assert.equal(rows.length, 0, `Expected 0 rows for non-matching prefix, got ${rows.length}`);
+});
+
+test('get_ecosystem_summary: project_slug_prefix scopes project counts', async () => {
+  const all = await callTool('get_ecosystem_summary', {});
+  const filtered = await callTool('get_ecosystem_summary', {
+    project_slug_prefix: 'github.com/test-org/',
+  });
+
+  const totalAll = Object.values(all.project_counts_by_language).reduce((s, n) => s + n, 0);
+  const totalFiltered = Object.values(filtered.project_counts_by_language).reduce((s, n) => s + n, 0);
+
+  // The fixture projects all live under github.com/test-org/, so the filtered count must be > 0
+  // and <= the unfiltered total (extra scans from temp projects may inflate the unfiltered count)
+  assert.ok(totalFiltered >= 1, `Expected at least 1 project in scoped ecosystem summary, got ${totalFiltered}`);
+  assert.ok(totalFiltered <= totalAll, `Filtered count (${totalFiltered}) should be <= unfiltered total (${totalAll})`);
+
+  // The top_packages and tooling sections must still be present
+  assert.ok(typeof filtered.project_counts_by_language === 'object', 'project_counts_by_language should be an object');
+  assert.ok(typeof filtered.top_packages === 'object', 'top_packages should be present');
+  assert.ok(typeof filtered.tooling === 'object', 'tooling should be present');
+});
+
+test('get_ecosystem_summary: non-matching prefix returns zero project counts', async () => {
+  const result = await callTool('get_ecosystem_summary', {
+    project_slug_prefix: 'gitlab.example.com/no-match/',
+  });
+  const total = Object.values(result.project_counts_by_language).reduce((s, n) => s + n, 0);
+  assert.equal(total, 0, `Expected 0 total projects for non-matching prefix, got ${total}`);
+});
+
+test('query_scan_coverage: project_slug_prefix scopes monthly project counts', async () => {
+  const all = await callTool('query_scan_coverage', { period_months: 3 });
+  const filtered = await callTool('query_scan_coverage', {
+    period_months: 3,
+    project_slug_prefix: 'github.com/test-org/',
+  });
+
+  assert.equal(filtered.length, all.length, 'Both calls should return same number of monthly periods');
+
+  // The fixture projects all live under github.com/test-org/, so at least one month
+  // should have a non-zero count, and each scoped count must be <= the unfiltered count
+  const hasNonZero = filtered.some((r) => r.projects_scanned > 0);
+  assert.ok(hasNonZero, 'At least one month should have scanned projects for the matching prefix');
+
+  for (let i = 0; i < all.length; i++) {
+    assert.ok(
+      filtered[i].projects_scanned <= all[i].projects_scanned,
+      `Period ${all[i].period}: scoped count (${filtered[i].projects_scanned}) should be <= unfiltered (${all[i].projects_scanned})`,
+    );
+  }
+});
+
+test('query_scan_coverage: non-matching prefix returns zero projects per period', async () => {
+  const rows = await callTool('query_scan_coverage', {
+    period_months: 3,
+    project_slug_prefix: 'gitlab.example.com/no-match/',
+  });
+  for (const row of rows) {
+    assert.equal(row.projects_scanned, 0, `Expected 0 projects for non-matching prefix in period ${row.period}`);
+  }
+});
+
+test('list_projects: project_slug_prefix scopes project list and count', async () => {
+  const allCount = await callTool('list_projects', { count_only: true });
+  const filteredCount = await callTool('list_projects', {
+    count_only: true,
+    project_slug_prefix: 'github.com/test-org/',
+  });
+
+  assert.ok(
+    filteredCount.project_count <= allCount.project_count,
+    `Scoped count (${filteredCount.project_count}) should be <= unfiltered (${allCount.project_count})`,
+  );
+  assert.ok(filteredCount.project_count >= 1, 'Expected at least 1 project for the matching prefix');
+
+  const filteredList = await callTool('list_projects', {
+    project_slug_prefix: 'github.com/test-org/',
+  });
+
+  assert.ok(Array.isArray(filteredList), 'Expected array of projects');
+  assert.ok(filteredList.length >= 1, 'Expected at least 1 project in filtered list');
+  for (const project of filteredList) {
+    assert.ok(
+      project.project_id.startsWith('github.com/test-org/'),
+      `Expected project_id to start with "github.com/test-org/", got: ${project.project_id}`,
+    );
+  }
+});
+
+test('list_projects: count_only with non-matching prefix returns zero', async () => {
+  const result = await callTool('list_projects', {
+    count_only: true,
+    project_slug_prefix: 'gitlab.example.com/no-match/',
+  });
+  assert.equal(result.project_count, 0, `Expected 0 projects for non-matching prefix, got ${result.project_count}`);
+});
+
+test('list_ci_templates: project_slug_prefix scopes to matching fleet', async () => {
+  const all = await callTool('list_ci_templates', {});
+  const filtered = await callTool('list_ci_templates', {
+    project_slug_prefix: 'github.com/test-org/',
+  });
+
+  assert.ok(filtered.length >= 1, 'Expected at least 1 CI template for matching prefix');
+  // All fixtures match, counts should be equal
+  const totalAll = all.reduce((s, r) => s + r.project_count, 0);
+  const totalFiltered = filtered.reduce((s, r) => s + r.project_count, 0);
+  assert.equal(totalFiltered, totalAll, 'Total project counts should match when all projects have the scoped prefix');
+});
+
+test('list_ci_templates: non-matching prefix returns empty results', async () => {
+  const rows = await callTool('list_ci_templates', {
+    project_slug_prefix: 'gitlab.example.com/no-match/',
+  });
+  assert.equal(rows.length, 0, `Expected 0 CI template rows for non-matching prefix, got ${rows.length}`);
+});
+
+test('query_dependency_adoption_trend: project_slug_prefix scopes adopter counts', async () => {
+  const all = await callTool('query_dependency_adoption_trend', {
+    package_name: 'react',
+    period_months: 3,
+  });
+  const filtered = await callTool('query_dependency_adoption_trend', {
+    package_name: 'react',
+    period_months: 3,
+    project_slug_prefix: 'github.com/test-org/',
+  });
+
+  assert.equal(filtered.length, all.length, 'Both calls should return same number of monthly periods');
+
+  // Counts should be equal because all adopters are under the matching prefix
+  for (let i = 0; i < all.length; i++) {
+    assert.equal(
+      filtered[i].adopting_projects,
+      all[i].adopting_projects,
+      `Period ${all[i].period}: scoped count (${filtered[i].adopting_projects}) should equal unfiltered (${all[i].adopting_projects})`,
+    );
+  }
+});
+
+test('query_dependency_adoption_trend: non-matching prefix returns zero adopters', async () => {
+  const rows = await callTool('query_dependency_adoption_trend', {
+    package_name: 'react',
+    period_months: 3,
+    project_slug_prefix: 'gitlab.example.com/no-match/',
+  });
+  for (const row of rows) {
+    assert.equal(
+      row.adopting_projects,
+      0,
+      `Expected 0 adopters for non-matching prefix in period ${row.period}, got ${row.adopting_projects}`,
+    );
+  }
+});
+
+test('query_ci_template_adoption_trend: project_slug_prefix scopes adopter counts', async () => {
+  const all = await callTool('query_ci_template_adoption_trend', {
+    source: 'actions/checkout',
+    period_months: 3,
+  });
+  const filtered = await callTool('query_ci_template_adoption_trend', {
+    source: 'actions/checkout',
+    period_months: 3,
+    project_slug_prefix: 'github.com/test-org/',
+  });
+
+  assert.equal(filtered.length, all.length, 'Both calls should return the same number of monthly periods');
+
+  for (let i = 0; i < all.length; i++) {
+    assert.equal(
+      filtered[i].adopting_projects,
+      all[i].adopting_projects,
+      `Period ${all[i].period}: scoped count (${filtered[i].adopting_projects}) should equal unfiltered (${all[i].adopting_projects})`,
+    );
+  }
+});
+
+test('query_ci_template_adoption_trend: non-matching prefix returns zero adopters', async () => {
+  const rows = await callTool('query_ci_template_adoption_trend', {
+    source: 'actions/checkout',
+    period_months: 3,
+    project_slug_prefix: 'gitlab.example.com/no-match/',
+  });
+  for (const row of rows) {
+    assert.equal(
+      row.adopting_projects,
+      0,
+      `Expected 0 CI template adopters for non-matching prefix in period ${row.period}, got ${row.adopting_projects}`,
+    );
+  }
+});
+
 test('dependencies Parquet: both javascript and python language values present', async () => {
   const { queryParquet, requireParquet } = await import('../dist/parquet-query.js');
   const p = requireParquet('dependencies');
