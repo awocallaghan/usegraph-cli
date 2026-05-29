@@ -29,7 +29,7 @@ usegraph solves this by scanning the AST of every project, recording precise usa
   queryable with DuckDB
 - **Web dashboard**: `usegraph dashboard` launches an interactive Observable Framework app for
   exploring component adoption, dependency versions, and project detail
-- **MCP server**: `usegraph mcp` exposes 13 tools over stdio so Claude (and other MCP clients)
+- **MCP server**: `usegraph mcp` exposes 20 tools over stdio so Claude (and other MCP clients)
   can query your organisation's usage data directly
 - **Tech stack detection**: detect build tools, test frameworks, linters, formatters, package managers, and more; for Python projects additionally detects framework (Django/Flask/FastAPI/Starlette), Python version, linter, formatter, and type checker
 - **Dependency reporting**: count and categorise all npm dependencies with resolved versions
@@ -171,7 +171,7 @@ Options:
 
 ### `usegraph mcp [--verbose]`
 
-Starts a Model Context Protocol (MCP) server over stdio that exposes 13 tools querying
+Starts a Model Context Protocol (MCP) server over stdio that exposes 20 tools querying
 the Parquet tables built by `usegraph build`. Wire this into Claude Desktop or any other
 MCP-compatible client.
 
@@ -259,7 +259,7 @@ usegraph init ./my-project
                                          │  usegraph dashboard / mcp
                                          ▼
                   ┌──────────────────────────────────────────────────┐
-                  │   Web dashboard  /  MCP server (13 tools)         │
+                  │   Web dashboard  /  MCP server (20 tools)         │
                   │   Claude Desktop / Cursor / any MCP client        │
                   └──────────────────────────────────────────────────┘
 ```
@@ -423,7 +423,7 @@ src/
     scan.ts                 # scan command handler
     build.ts                # build command — reads JSON scans, writes Parquet via DuckDB
     dashboard.ts            # dashboard command — launches Observable Framework dev server
-    mcp.ts                  # mcp command — MCP server (13 tools, JSON-RPC 2.0 over stdio)
+    mcp.ts                  # mcp command — MCP server (20 tools, JSON-RPC 2.0 over stdio)
   dashboard/
     observablehq.config.js  # Observable Framework configuration
     pages/
